@@ -421,8 +421,11 @@ def run_rope(
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
 
-    
+    #step1:
+    batch_size,seq_len=in_query_or_key[:2]
+
     """
+    
     # 获取输入张量的形状
     batch_size, seq_len = in_query_or_key.shape[:2]
 
