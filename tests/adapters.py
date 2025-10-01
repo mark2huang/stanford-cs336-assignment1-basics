@@ -11,6 +11,7 @@ from torch import Tensor
 
 
 #cd /Users/hcb/Desktop/AI/跟着斯坦福/CS336/assignment1-basics-main && venv/bin/python -m pytest tests/test_model.py::test_linear tests/test_model.py::test_embedding tests/test_model.py::test_swiglu tests/test_model.py::test_rope -v
+#git config  user.name=mark.huangcb  
 
 def run_linear(
     d_in: int,
