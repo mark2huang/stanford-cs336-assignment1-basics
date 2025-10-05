@@ -8,6 +8,8 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+import math
+import numpy as np
 
 
 #cd /Users/hcb/Desktop/AI/跟着斯坦福/CS336/assignment1-basics-main && venv/bin/python -m pytest tests/test_model.py::test_linear tests/test_model.py::test_embedding tests/test_model.py::test_swiglu tests/test_model.py::test_rope -v
@@ -33,7 +35,7 @@ def run_linear(
     """
 
     # 使用torch.matmul执行线性变换: y = xW^T
-    # 其中in_features的形状是(..., d_in)，weights.T的形状是(d_in, d_out)
+    # 其中in_features的形状是(..., d_in),weights.T的形状是(d_in, d_out)
     return torch.matmul(in_features, weights.T)
 
 
@@ -91,7 +93,7 @@ def run_swiglu(
 
     # step1:将输入in_features投影到高维度,作为上采样
     value = in_features@w1_weight.T  # 形状: [..., d_ff]
-    # step2:将输入in_features投影到高维度，作为门控信号
+    # step2:将输入in_features投影到高维度,作为门控信号
     gate = in_features@w3_weight.T  # 形状: [..., d_ff]
     # step3:对value应用swish激活函数
     swish_value = value * torch.sigmoid(value)  # 形状: [..., d_ff]
@@ -136,7 +138,7 @@ def run_scaled_dot_product_attention(
         (torch.sqrt(torch.tensor(d_k, dtype=attentionMatrix.dtype)))
     print(f"缩放后 shape: {attentionMatrix.shape}")
 
-    # step3: 应用掩码（如果有）
+    # step3: 应用掩码(如果有）
     if mask is not None:
         attentionMatrix = attentionMatrix.masked_fill(~mask, -1e9)
     print(f"掩码后 shape: {attentionMatrix.shape}")
@@ -202,21 +204,21 @@ def run_multihead_self_attention(
     in_features:torch.Size([4, 12, 64])
     q_proj_weight: torch.Size([64, 64])
 
-    第一个64：d_k - 每个头的查询/键维度
-    第二个64：d_in - 输入特征维度
-    关键理解：虽然 q_proj_weight 形状是 [64, 64]，但这实际上是所有头的投影权重合并在一起。因为 num_heads = 4，所以：
-    每个头的实际维度：d_k_per_head = 64 / 4 = 16
-    总投影权重大小：d_k = 16 × 4 = 64
+    第一个64:d_k - 每个头的查询/键维度
+    第二个64:d_in - 输入特征维度
+    关键理解:虽然 q_proj_weight 形状是 [64, 64],但这实际上是所有头的投影权重合并在一起。因为 num_heads = 4,所以:
+    每个头的实际维度:d_k_per_head = 64 / 4 = 16
+    总投影权重大小:d_k = 16 x 4 = 64
 
-    2. 输入特征形状：[4, 12, 64]
+    2. 输入特征形状:[4, 12, 64]
     in_features: torch.Size([4, 12, 64])
 
-    第一个4：batch_size - 批次大小（4个样本）
-    第二个12：sequence_length - 序列长度（12个token）
-    第三个64：d_in - 输入特征维度（与投影权重的第二个维度匹配）
+    第一个4:batch_size - 批次大小(4个样本)
+    第二个12:sequence_length - 序列长度(12个token)
+    第三个64:d_in - 输入特征维度(与投影权重的第二个维度匹配）
     """
 
-    # Step 1: 计算Q、K、V投影（所有头一起处理）
+    # Step 1: 计算Q、K、V投影(所有头一起处理）
     # [..., seq_len, d_model]
     Q = in_features @ q_proj_weight.T
     print(f"Q.shape={Q.shape}")  # [batch=4, seq_len=12, d_k=64]
@@ -242,8 +244,8 @@ def run_multihead_self_attention(
     print(f"d_k_per_head: {d_k_per_head}, d_v_per_head: {d_v_per_head}")
 
     # step2:将投影后的张量重新组织为多头格式
-    # 当前形状：[batch_size, seq_len, d_k] 目标形状：[batch_size, num_heads, seq_len, d_k_per_head]
-    # 注意：标准实现中，多头重组应该按照 [batch_size, seq_len, num_heads, d_k_per_head] 然后 transpose(1, 2)
+    # 当前形状:[batch_size, seq_len, d_k] 目标形状:[batch_size, num_heads, seq_len, d_k_per_head]
+    # 注意:标准实现中,多头重组应该按照 [batch_size, seq_len, num_heads, d_k_per_head] 然后 transpose(1, 2)
     Q = Q.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
     K = K.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
     V = V.view(batch_size, seq_len, num_heads, d_v_per_head).transpose(1, 2)
@@ -253,7 +255,7 @@ def run_multihead_self_attention(
     print(f"V.shape={V.shape}")
 
     # step3:计算注意力矩阵
-    # Q: [batch_size, num_heads, seq_len, d_k_per_head] × K^T: [batch_size, num_heads, d_k_per_head, seq_len]
+    # Q: [batch_size, num_heads, seq_len, d_k_per_head] x K^T: [batch_size, num_heads, d_k_per_head, seq_len]
     # = [batch_size, num_heads, seq_len, seq_len]
     attention_scores = Q @ K.transpose(-2, -1)
     print(f"attention_scores.shape={attention_scores.shape}")
@@ -330,24 +332,24 @@ def run_multihead_self_attention_with_rope(
     d_k_per_head = d_k // num_heads  # 每个头的查询/键维度
     d_v_per_head = d_v // num_heads  # 每个头的值维度
 
-    # 步骤1: 投影计算（单矩阵乘法）
+    # 步骤1: 投影计算(单矩阵乘法）
     Q = in_features @ q_proj_weight.T  # [batch_size, seq_len, d_k]
     K = in_features @ k_proj_weight.T  # [batch_size, seq_len, d_k]
     V = in_features @ v_proj_weight.T  # [batch_size, seq_len, d_v]
 
     # 步骤2: 将投影后的张量重新组织为多头格式
-    # 当前形状：[batch_size, seq_len, d_k] 目标形状：[batch_size, num_heads, seq_len, d_k_per_head]
+    # 当前形状:[batch_size, seq_len, d_k] 目标形状:[batch_size, num_heads, seq_len, d_k_per_head]
     Q = Q.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
     K = K.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
     # [batch_size, num_heads, seq_len, d_k_per_head]
 
-    # V张量单独处理，因为不需要应用RoPE
+    # V张量单独处理,因为不需要应用RoPE
     V = V.view(batch_size, seq_len, num_heads, d_v_per_head).transpose(1, 2)
     # [batch_size, num_heads, seq_len, d_v_per_head]
 
-    # 步骤3: 应用RoPE到Q和K（如果提供了位置信息）
+    # 步骤3: 应用RoPE到Q和K(如果提供了位置信息）
     if token_positions is not None:
-        # 对每个头的Q和K应用RoPE，RoPE维度是每个头的维度
+        # 对每个头的Q和K应用RoPE,RoPE维度是每个头的维度
         # 需要将多头张量重塑为 [batch_size * num_heads, seq_len, d_k_per_head]
         Q_reshaped = Q.transpose(1, 2).contiguous().view(
             batch_size * num_heads, seq_len, d_k_per_head)
@@ -357,10 +359,10 @@ def run_multihead_self_attention_with_rope(
         # 扩展位置信息以匹配多头
         # token_positions 的形状可能是 [1, seq_len] 或 [batch_size, seq_len]
         if token_positions.shape[0] == 1:
-            # 如果是 [1, seq_len]，扩展到 [batch_size * num_heads, seq_len]
+            # 如果是 [1, seq_len],扩展到 [batch_size * num_heads, seq_len]
             pos_expanded = token_positions.repeat(batch_size * num_heads, 1)
         else:
-            # 如果是 [batch_size, seq_len]，扩展到 [batch_size * num_heads, seq_len]
+            # 如果是 [batch_size, seq_len],扩展到 [batch_size * num_heads, seq_len]
             pos_expanded = token_positions.unsqueeze(1).repeat(
                 1, num_heads, 1).view(batch_size * num_heads, seq_len)
 
@@ -374,7 +376,7 @@ def run_multihead_self_attention_with_rope(
         Q = Q_rope.view(batch_size, num_heads, seq_len, d_k_per_head)
         K = K_rope.view(batch_size, num_heads, seq_len, d_k_per_head)
 
-    # V已经在步骤2中正确重塑，不需要重复操作
+    # V已经在步骤2中正确重塑,不需要重复操作
     # [batch_size, num_heads, seq_len, d_v_per_head]
 
     # 步骤4: 计算注意力分数 QK^T
@@ -394,7 +396,7 @@ def run_multihead_self_attention_with_rope(
     tmp_output = attention_weights @ V
 
     # 步骤8: 合并多头输出
-    # 当前形状：[batch_size, num_heads, seq_len, d_v_per_head] 目标形状：[batch_size, seq_len, d_v]
+    # 当前形状:[batch_size, num_heads, seq_len, d_v_per_head] 目标形状:[batch_size, seq_len, d_v]
     output = tmp_output.transpose(
         1, 2).contiguous().view(batch_size, seq_len, d_v)
 
@@ -405,12 +407,12 @@ def run_multihead_self_attention_with_rope(
 
 
 def run_rope(
-    d_k: int,
-    theta: float,
-    max_seq_len: int,
-    in_query_or_key: Float[Tensor, " ... sequence_length d_k"],
-    token_positions: Int[Tensor, " ... sequence_length"],
-) -> Float[Tensor, " ... sequence_length d_k"]:
+    d_k: int,         #嵌入维度大小(必须是偶数)
+    theta: float,     #RoPE参数,控制旋转频率
+    max_seq_len: int, #最大序列长度,用于预计算
+    in_query_or_key: Float[Tensor, " ... sequence_length d_k"],  #输入Q或K张量
+    token_positions: Int[Tensor, " ... sequence_length"],        #token_positions 是位置索引张量,它告诉RoPE函数每个token在序列中的具体位置。
+) -> Float[Tensor, " ... sequence_length d_k"]:                  #返回应用了RoPE的张量
     """
     Run RoPE for a given input tensor.
 
@@ -424,50 +426,167 @@ def run_rope(
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
 
-    #step1:
-    batch_size,seq_len=in_query_or_key[:2]
-
     """
+    Rotary Positional Embedding (RoPE): 通过旋转方式将位置信息注入 query 和 key 向量。
     
-    # 获取输入张量的形状
-    batch_size, seq_len = in_query_or_key.shape[:2]
+    公式:
+        rope(x) = x[:, 2i]   * cos(pos * θ^(-2i/d_k)) 
+                - x[:, 2i+1] * sin(pos * θ^(-2i/d_k))
 
-    # 确保d_k是偶数，因为RoPE需要将维度分成对
-    assert d_k % 2 == 0, "d_k must be even for RoPE"
-
-    # 步骤1: 预计算旋转频率
-    # 频率计算公式: theta_i = theta^(-2i/d_k) for i in range(0, d_k//2)
-    freqs = theta ** (-torch.arange(0, d_k, 2, dtype=torch.float32) / d_k)
-
-    # 步骤2: 创建位置编码矩阵
-    # 为每个位置创建旋转角度: position * freqs
-    positions = token_positions.unsqueeze(-1)  # [batch_size, seq_len, 1]
-    # [batch_size, seq_len, d_k//2]
-    angles = positions * freqs.unsqueeze(0).unsqueeze(0)
-
-    # 步骤3: 计算旋转矩阵的cos和sin分量
-    cos_vals = torch.cos(angles)  # [batch_size, seq_len, d_k//2]
-    sin_vals = torch.sin(angles)  # [batch_size, seq_len, d_k//2]
-
-    # 步骤4: 将输入张量分成实部和虚部（成对处理）
-    # 将d_k维分成d_k//2对复数
-    # [batch_size, seq_len, d_k//2, 2]
-    x = in_query_or_key.view(batch_size, seq_len, d_k//2, 2)
-
-    # 步骤5: 应用旋转操作
-    # 旋转公式: [x0, x1] -> [x0*cos - x1*sin, x0*sin + x1*cos]
-    x_rotated = torch.stack([
-        x[..., 0] * cos_vals - x[..., 1] * sin_vals,  # 实部旋转
-        x[..., 0] * sin_vals + x[..., 1] * cos_vals   # 虚部旋转
-    ], dim=-1)  # [batch_size, seq_len, d_k//2, 2]
-
-    # 步骤6: 将旋转后的张量重新整形为原始形状
-    # [batch_size, seq_len, d_k]
-    output = x_rotated.view(batch_size, seq_len, d_k)
+    支持任意批处理维度,并根据 token_positions 动态索引预计算的 cos/sin 缓存。
     """
 
 
-    return output
+    """
+    # 假设每个token的4维向量(随机示例)
+    # 形状: [batch_size=1, seq_len=3, d_k=4]
+
+    in_query_or_key = torch.tensor([
+    [[0.1, 0.2, 0.3, 0.4]],    # "I" 的嵌入向量
+    [[0.5, 0.6, 0.7, 0.8]],    # "love" 的嵌入向量  
+    [[0.9, 1.0, 1.1, 1.2]]     # "apple" 的嵌入向量
+    ])
+
+
+    # 将d_k=4分成2对复数 [实部, 虚部]
+    # 形状: [1, 3, 2, 2]
+    x = in_query_or_key.view(1, 3, 2, 2)
+
+    # 分解后的结构:
+    # Token "I" (位置0):
+    #   第1对: [0.1, 0.2]  → 复数: 0.1 + 0.2i
+    #   第2对: [0.3, 0.4]  → 复数: 0.3 + 0.4i
+
+    # Token "love" (位置1):
+    #   第1对: [0.5, 0.6]  → 复数: 0.5 + 0.6i  
+    #   第2对: [0.7, 0.8]  → 复数: 0.7 + 0.8i
+
+    # Token "apple" (位置2):
+    #   第1对: [0.9, 1.0]  → 复数: 0.9 + 1.0i
+    #   第2对: [1.1, 1.2]  → 复数: 1.1 + 1.2i
+
+
+    # 频率计算: θ^(-2i/d_k) for i=0,1
+    freqs = [10000^(-0/4)=1.0, 10000^(-2/4)=0.01]
+
+    # 角度计算: 位置 x 频率
+    # Token "I" (位置0): [0x1.0=0°, 0x0.01=0°]
+    # Token "love" (位置1): [1x1.0=1°, 1x0.01=0.01°]  
+    # Token "apple" (位置2): [2x1.0=2°, 2x0.01=0.02°]
+
+    cos_vals = [[cos(0°)=1.0, cos(0°)=1.0], 
+                [cos(1°)=0.9998, cos(0.01°)=0.9999],
+                [cos(2°)=0.9994, cos(0.02°)=0.9999]]
+
+    sin_vals = [[sin(0°)=0.0, sin(0°)=0.0],
+                [sin(1°)=0.0175, sin(0.01°)=0.0002],
+                [sin(2°)=0.0349, sin(0.02°)=0.0003]]
+
+    x_rotated = torch.stack([
+        x[..., 0] * cos_vals - x[..., 1] * sin_vals,  # 新的实部
+        x[..., 0] * sin_vals + x[..., 1] * cos_vals   # 新的虚部
+    ], dim=-1)
+
+
+
+        # 第1对复数: [0.1, 0.2] → 旋转0°
+    新实部 = 0.1x1.0 - 0.2x0.0 = 0.1
+    新虚部 = 0.1x0.0 + 0.2x1.0 = 0.2
+    # 结果: [0.1, 0.2] (不变,因为位置0不旋转)
+
+    # 第2对复数: [0.3, 0.4] → 旋转0°
+    新实部 = 0.3x1.0 - 0.4x0.0 = 0.3  
+    新虚部 = 0.3x0.0 + 0.4x1.0 = 0.4
+    # 结果: [0.3, 0.4] (不变)
+
+
+        # 第1对复数: [0.5, 0.6] → 旋转1°
+    新实部 = 0.5x0.9998 - 0.6x0.0175 ≈ 0.4999 - 0.0105 = 0.4894
+    新虚部 = 0.5x0.0175 + 0.6x0.9998 ≈ 0.0088 + 0.5999 = 0.6087
+    # 结果: [0.4894, 0.6087] (轻微旋转)
+
+    # 第2对复数: [0.7, 0.8] → 旋转0.01°  
+    新实部 = 0.7x0.9999 - 0.8x0.0002 ≈ 0.6999 - 0.0002 = 0.6997
+    新虚部 = 0.7x0.0002 + 0.8x0.9999 ≈ 0.0001 + 0.7999 = 0.8000
+    # 结果: [0.6997, 0.8000] (几乎不变)
+
+
+
+
+    # 第1对复数: [0.9, 1.0] → 旋转2°
+    新实部 = 0.9x0.9994 - 1.0x0.0349 ≈ 0.8995 - 0.0349 = 0.8646
+    新虚部 = 0.9x0.0349 + 1.0x0.9994 ≈ 0.0314 + 0.9994 = 1.0308
+    # 结果: [0.8646, 1.0308] (明显旋转)
+
+    # 第2对复数: [1.1, 1.2] → 旋转0.02°
+    新实部 = 1.1x0.9999 - 1.2x0.0003 ≈ 1.0999 - 0.0004 = 1.0995
+    新虚部 = 1.1x0.0003 + 1.2x0.9999 ≈ 0.0003 + 1.1999 = 1.2002  
+    # 结果: [1.0995, 1.2002] (几乎不变)
+
+
+    新实部 = 原实部xcosθ - 原虚部xsinθ
+    新虚部 = 原实部xsinθ + 原虚部xcosθ
+
+
+
+    应用RoPE后:
+
+    位置0的token:几乎不旋转(角度小）
+    位置越靠后的token:旋转角度越大
+    不同频率维度:旋转速度不同(高频维度旋转快,低频维度旋转慢）
+    这样,模型就能通过旋转角度来区分不同位置的相同词汇,实现位置编码的效果！
+    """
+    #step1: 获取输入张量的形状
+    print(f"\n in_query_or_key.shape={in_query_or_key.shape}") #[4,12,64]
+    batchsize=in_query_or_key.shape[0] #4
+    seqlen=in_query_or_key.shape[1] #12
+    d_k=in_query_or_key.shape[2] #64
+
+    #step2: 确认嵌入维度是偶数
+    if d_k %2!=0:
+        raise ValueError("d_k must be even for RoPE")
+    
+    #step3: 计算旋转角度 角度 = token索引 x θ^(-2i/d)​​
+    #token_positions token_positions=tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11]),token_positions.shape=torch.Size([12])
+    print(f"token_positions={token_positions},token_positions.shape={token_positions.shape}")
+
+    freqs=[]
+    for i in range(0,d_k//2):
+        freqs.append(math.pow(theta,(-2*i)/d_k))
+
+    print(f"freqs={freqs},freqs.shape={len(freqs)}")
+    angles=[]
+    # 对每个token位置
+    for i in range(0,len(token_positions)):
+        position=token_positions[i]
+        print(f"position={position}")
+        angle_row=[]
+        # 对每个维度
+        for freq_idx in range(0,len(freqs)):
+            angle=position*freqs[freq_idx]
+            angle_row.append(angle)
+        angles.append(angle_row)
+    #转化为向量
+    angles=torch.tensor(angles) #[12,32]
+    print(f"angles={angles},angles.shape={angles.shape}")
+
+
+    #step4: 创建旋转矩阵
+    cos_vals=torch.cos(angles) #[12,32]
+    sin_vals=torch.sin(angles) #[12,32]
+
+    #step5:将输入张量视为复数对 [实部, 虚部]
+    x=in_query_or_key.view(batchsize,seqlen,d_k//2,2) #[4,12,32,2]
+
+    #step6: 应用旋转矩阵
+    x_rotated = torch.stack([
+    x[..., 0] * cos_vals - x[..., 1] * sin_vals,  # 新的实部
+    x[..., 0] * sin_vals + x[..., 1] * cos_vals   # 新的虚部
+    ], dim=-1)
+
+    #step7: 将旋转后的张量重新整形为原始形状
+    x_rotated=x_rotated.view(batchsize,seqlen,d_k) #[4,12,64]
+    return x_rotated
 
 
 def run_transformer_block(
@@ -540,6 +659,14 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
+
+    """
+    输入 → RMSNorm → 多头自注意力 → 残差连接 → RMSNorm → 前馈网络 → 残差连接 → 输出
+    """
+    #step1:RSMNorm
+    #in_features=run_rmsnorm(d_model=d_model, eps=1e-5, weights=weights['ln1.weight'], in_features=in_features)
+
+
     raise NotImplementedError
 
 
@@ -645,7 +772,40 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+
+    """
+    标准LayerNorm:
+        计算均值和方差：对每个样本的所有特征维度
+        (x-mean)/sqrt(variance+eps)
+    
+    RMSNorm:
+        只计算均方根(RMS),不计算均值
+        output = (x / RMS(x)) * weights
+
+        其中：
+
+        RMS(x) = sqrt(mean(x²) + eps)
+        weights 是可学习的缩放参数
+
+    """
+    
+    print(f"\n in_features.shape={in_features.shape}") #[4,12,64]
+
+    output=in_features.clone()
+
+    #每一个batch
+    for i in range(in_features.shape[0]):
+        #每个token
+        for j in range(in_features.shape[1]):
+            #step1:计算均方根rms
+            token_feature=in_features[i][j][:]
+            token_feature_squared=token_feature**2
+            mean_token_feature_squared=torch.mean(token_feature_squared)
+            rms=torch.sqrt(mean_token_feature_squared+eps)
+            #step2:归一化
+            output[i][j][:]=(in_features[i][j][:]/rms)*weights
+    return output
+
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
@@ -659,7 +819,7 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    return in_features*torch.sigmoid(in_features)
 
 
 def run_get_batch(
@@ -682,7 +842,33 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    #step1: 计算最大可用的其实索引，确保序列不会越界
+    max_start_index=len(dataset)-context_length
+
+    #step2：随机生成batch_size个起始索引
+    start_indices=torch.randint(0,max_start_index,(batch_size,))
+    #print(f"start_indices={start_indices}")
+
+    #step3:构建批次
+    inputs=[]
+    labels=[]
+    for i in start_indices:
+        input_seq=dataset[i:i+context_length]
+        label_seq=dataset[i+1:i+1+context_length]
+        inputs.append(input_seq)
+        labels.append(label_seq)
+
+    # step4: 转换为张量并移动到指定设备
+    inputs_tensor = torch.tensor(np.array(inputs), dtype=torch.long, device=device)
+    labels_tensor = torch.tensor(np.array(labels), dtype=torch.long, device=device)
+    
+    return inputs_tensor, labels_tensor
+    
+
+
+
+
+    
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -830,7 +1016,7 @@ def get_tokenizer(
     tokenizer = BpeTokenizer()
 
     # 2. 配置 tokenizer 的状态
-    # 测试传入的 vocab 是 {id: bytes}，我们需要 {bytes: id} 用于编码
+    # 测试传入的 vocab 是 {id: bytes},我们需要 {bytes: id} 用于编码
     # 和 {id: bytes} 用于解码
     tokenizer.vocab = {token_bytes: token_id for token_id,
                        token_bytes in vocab.items()}
@@ -845,8 +1031,8 @@ def get_tokenizer(
             'utf-8') for token in special_tokens]
         tokenizer.special_tokens = set(special_tokens_bytes)
 
-        # 将特殊 token 添加到词汇表中（如果它们不存在）
-        # 测试代码已经保证了这一点，但双重检查更稳健
+        # 将特殊 token 添加到词汇表中(如果它们不存在）
+        # 测试代码已经保证了这一点,但双重检查更稳健
         for token_bytes in special_tokens_bytes:
             if token_bytes not in tokenizer.vocab:
                 new_id = len(tokenizer.vocab)
