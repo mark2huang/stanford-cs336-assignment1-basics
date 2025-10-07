@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from requests import get
+import torch.nn as nn
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
@@ -10,6 +12,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 import math
 import numpy as np
+import time
 
 
 #cd /Users/hcb/Desktop/AI/跟着斯坦福/CS336/assignment1-basics-main && venv/bin/python -m pytest tests/test_model.py::test_linear tests/test_model.py::test_embedding tests/test_model.py::test_swiglu tests/test_model.py::test_rope -v
@@ -36,7 +39,8 @@ def run_linear(
 
     # 使用torch.matmul执行线性变换: y = xW^T
     # 其中in_features的形状是(..., d_in),weights.T的形状是(d_in, d_out)
-    return torch.matmul(in_features, weights.T)
+    ans=torch.matmul(in_features,weights.T)
+    return ans
 
 
 def run_embedding(
@@ -123,33 +127,33 @@ def run_scaled_dot_product_attention(
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
 
-    print("\n")
-    print(f"Q shape: {Q.shape}")
-    print(f"K shape: {K.shape}")
-    print(f"V shape: {V.shape}")
+    #print("\n")
+    #print(f"Q shape: {Q.shape}")
+    #print(f"K shape: {K.shape}")
+    #print(f"V shape: {V.shape}")
 
     # step1: 计算注意力分数矩阵
     attentionMatrix = torch.einsum("... q d,...k d->...q k", Q, K)
-    print(f"scores shape: {attentionMatrix.shape}")
+    #print(f"scores shape: {attentionMatrix.shape}")
 
     # step2: 缩放
     d_k = Q.shape[-1]
     attentionMatrix = attentionMatrix / \
         (torch.sqrt(torch.tensor(d_k, dtype=attentionMatrix.dtype)))
-    print(f"缩放后 shape: {attentionMatrix.shape}")
+    #print(f"缩放后 shape: {attentionMatrix.shape}")
 
     # step3: 应用掩码(如果有）
     if mask is not None:
         attentionMatrix = attentionMatrix.masked_fill(~mask, -1e9)
-    print(f"掩码后 shape: {attentionMatrix.shape}")
+    #print(f"掩码后 shape: {attentionMatrix.shape}")
 
     # step4: Softmax归一化
     attentionMatrix = torch.softmax(attentionMatrix, dim=-1)
-    print(f"Softmax后 shape: {attentionMatrix.shape}")
+    #print(f"Softmax后 shape: {attentionMatrix.shape}")
 
     # step5: 加权求和
     output = torch.einsum("... q k,...k d->... q d", attentionMatrix, V)
-    print(f"最终输出 shape: {output.shape}")
+    #print(f"最终输出 shape: {output.shape}")
 
     return output
 
@@ -187,12 +191,12 @@ def run_multihead_self_attention(
     """
 
     # 打印形状信息用于调试
-    print(f"\nd_model: {d_model}, num_heads: {num_heads}")
-    print(f"q_proj_weight: {q_proj_weight.shape}")
-    print(f"k_proj_weight: {k_proj_weight.shape}")
-    print(f"v_proj_weight: {v_proj_weight.shape}")
-    print(f"o_proj_weight:{o_proj_weight.shape}")
-    print(f"in_features:{in_features.shape}")
+    #print(f"\nd_model: {d_model}, num_heads: {num_heads}")
+    #print(f"q_proj_weight: {q_proj_weight.shape}")
+    #print(f"k_proj_weight: {k_proj_weight.shape}")
+    #print(f"v_proj_weight: {v_proj_weight.shape}")
+    #print(f"o_proj_weight:{o_proj_weight.shape}")
+    #print(f"in_features:{in_features.shape}")
 
     """
     tests/test_model.py::test_multihead_self_attention 
@@ -221,15 +225,15 @@ def run_multihead_self_attention(
     # Step 1: 计算Q、K、V投影(所有头一起处理）
     # [..., seq_len, d_model]
     Q = in_features @ q_proj_weight.T
-    print(f"Q.shape={Q.shape}")  # [batch=4, seq_len=12, d_k=64]
+    #print(f"Q.shape={Q.shape}")  # [batch=4, seq_len=12, d_k=64]
 
     # [..., seq_len, d_k * num_heads]
     K = in_features @ k_proj_weight.T
-    print(f"K.shape={K.shape}")
+    #print(f"K.shape={K.shape}")
 
     # [..., seq_len, d_v * num_heads]
     V = in_features @ v_proj_weight.T
-    print(f"V.shape={V.shape}")
+    #print(f"V.shape={V.shape}")
 
     # 获取输入张量的形状信息
     batch_size, seq_len, _ = in_features.shape
@@ -240,8 +244,8 @@ def run_multihead_self_attention(
     d_k_per_head = d_k // num_heads  # 每个头的查询/键维度
     d_v_per_head = d_v // num_heads  # 每个头的值维度
 
-    print(f"d_k (total): {d_k}, d_v (total): {d_v}")
-    print(f"d_k_per_head: {d_k_per_head}, d_v_per_head: {d_v_per_head}")
+    #print(f"d_k (total): {d_k}, d_v (total): {d_v}")
+    #print(f"d_k_per_head: {d_k_per_head}, d_v_per_head: {d_v_per_head}")
 
     # step2:将投影后的张量重新组织为多头格式
     # 当前形状:[batch_size, seq_len, d_k] 目标形状:[batch_size, num_heads, seq_len, d_k_per_head]
@@ -250,39 +254,39 @@ def run_multihead_self_attention(
     K = K.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
     V = V.view(batch_size, seq_len, num_heads, d_v_per_head).transpose(1, 2)
     # [batch_size, num_heads, seq_len, d_k_per_head/d_v_per_head]
-    print(f"Q.shape={Q.shape}")
-    print(f"K.shape={K.shape}")
-    print(f"V.shape={V.shape}")
+    #print(f"Q.shape={Q.shape}")
+    #print(f"K.shape={K.shape}")
+    #print(f"V.shape={V.shape}")
 
     # step3:计算注意力矩阵
     # Q: [batch_size, num_heads, seq_len, d_k_per_head] x K^T: [batch_size, num_heads, d_k_per_head, seq_len]
     # = [batch_size, num_heads, seq_len, seq_len]
     attention_scores = Q @ K.transpose(-2, -1)
-    print(f"attention_scores.shape={attention_scores.shape}")
+    #print(f"attention_scores.shape={attention_scores.shape}")
 
     # step4:缩放
     attention_scores = attention_scores / \
         torch.sqrt(torch.tensor(d_k_per_head, dtype=attention_scores.dtype))
-    print(f"缩放之后attention_scores.shape={attention_scores.shape}")
+    #print(f"缩放之后attention_scores.shape={attention_scores.shape}")
 
     # step5:softmax
     attention_weights = torch.softmax(attention_scores, dim=-1)
-    print(f"softmax之后attention_weights.shape={attention_weights.shape}")
+    #print(f"softmax之后attention_weights.shape={attention_weights.shape}")
 
     # step6:乘以V   [batch_size, num_heads, seq_len, seq_len] @ [batch_size, num_heads, seq_len, d_v_per_head]
     # = [batch_size, num_heads, seq_len, d_v_per_head]
     tmp_output = attention_weights @ V
-    print(f"tmp_output.shape={tmp_output.shape}")
+    #print(f"tmp_output.shape={tmp_output.shape}")
 
     # step7: 合并多头输出
     # 当前形状: [batch_size, num_heads, seq_len, d_v_per_head] → 目标形状: [batch_size, seq_len, d_v]
     output = tmp_output.transpose(
         1, 2).contiguous().view(batch_size, seq_len, d_v)
-    print(f"合并多头输出之后output.shape={output.shape}")
+    #print(f"合并多头输出之后output.shape={output.shape}")
 
     # step8: 投影到输出维度
     output = output @ o_proj_weight.T
-    print(f"投影到输出维度之后output.shape={output.shape}")
+    #print(f"投影到输出维度之后output.shape={output.shape}")
     return output
 
 
@@ -537,7 +541,7 @@ def run_rope(
     这样,模型就能通过旋转角度来区分不同位置的相同词汇,实现位置编码的效果！
     """
     #step1: 获取输入张量的形状
-    print(f"\n in_query_or_key.shape={in_query_or_key.shape}") #[4,12,64]
+    #print(f"\n in_query_or_key.shape={in_query_or_key.shape}") #[4,12,64]
     batchsize=in_query_or_key.shape[0] #4
     seqlen=in_query_or_key.shape[1] #12
     d_k=in_query_or_key.shape[2] #64
@@ -548,18 +552,18 @@ def run_rope(
     
     #step3: 计算旋转角度 角度 = token索引 x θ^(-2i/d)​​
     #token_positions token_positions=tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11]),token_positions.shape=torch.Size([12])
-    print(f"token_positions={token_positions},token_positions.shape={token_positions.shape}")
+    #print(f"token_positions={token_positions},token_positions.shape={token_positions.shape}")
 
     freqs=[]
     for i in range(0,d_k//2):
         freqs.append(math.pow(theta,(-2*i)/d_k))
 
-    print(f"freqs={freqs},freqs.shape={len(freqs)}")
+    #print(f"freqs={freqs},freqs.shape={len(freqs)}")
     angles=[]
     # 对每个token位置
     for i in range(0,len(token_positions)):
         position=token_positions[i]
-        print(f"position={position}")
+        #print(f"position={position}")
         angle_row=[]
         # 对每个维度
         for freq_idx in range(0,len(freqs)):
@@ -568,7 +572,7 @@ def run_rope(
         angles.append(angle_row)
     #转化为向量
     angles=torch.tensor(angles) #[12,32]
-    print(f"angles={angles},angles.shape={angles.shape}")
+    #print(f"angles={angles},angles.shape={angles.shape}")
 
 
     #step4: 创建旋转矩阵
@@ -789,7 +793,7 @@ def run_rmsnorm(
 
     """
     
-    print(f"\n in_features.shape={in_features.shape}") #[4,12,64]
+    #print(f"\n in_features.shape={in_features.shape}") #[4,12,64]
 
     output=in_features.clone()
 
@@ -867,10 +871,6 @@ def run_get_batch(
 
 
 
-
-    
-
-
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
     """
     Given a tensor of inputs, return the output of softmaxing the given `dim`
@@ -884,7 +884,19 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    """
+    print(f"\nin_features.shape={in_features.shape}") #[3,5]
+    #safe_softmax
+    #step1:计算每行最大值
+    max_values=torch.max(in_features,dim=dim,keepdim=True)[0]
+    print(f"max_values.shape={max_values.shape}") #[3,1]
+    #step2:减去最大值
+    exp_vals=torch.exp(in_features-max_values)
+    #step3:计算softmax
+    softmax_vals=exp_vals/torch.sum(exp_vals,dim=dim,keepdim=True)
+    """
+    return torch.softmax(in_features,dim=dim)
+
 
 
 def run_cross_entropy(
@@ -902,9 +914,46 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+
+    """
+    inputs: 形状为 [batch_size, vocab_size] 的未归一化logits
+    targets: 形状为 [batch_size] 的真实标签索引
+    """
+    #step1:softmax得到概率分布
+    probs = torch.log_softmax(inputs, dim=1)
+    #print(f"\nprobs={probs}") 
+    #print(f"probs.shape={probs.shape}") #[8,5]
+
+    #print(f"targets={targets}")
+    #print(f"targets.shape={targets.shape}")
+    #step2:计算交叉熵
+    batch_size=inputs.shape[0]
+    """
+    # 假设批量大小为3,词汇表大小为4
+    batch_size = 3
+    vocab_size = 4
+
+    # 概率矩阵:3个样本,每个样本有4个类别的概率
+    probs = torch.tensor([
+        [0.1, 0.2, 0.3, 0.4],  # 样本0的概率分布
+        [0.4, 0.3, 0.2, 0.1],  # 样本1的概率分布  
+        [0.2, 0.2, 0.3, 0.3]   # 样本2的概率分布
+    ])
+
+    # 真实标签:样本0的真实类别是2,样本1的真实类别是0,样本2的真实类别是3
+    targets = torch.tensor([2, 0, 3])
+
+    # 高级索引操作
+    target_probs = probs[torch.arange(batch_size), targets]
+    print("获取的真实类别概率:", target_probs)
+    # 输出: tensor([0.3000, 0.4000, 0.3000])
+    """
+    target_probs=probs[torch.arange(batch_size),targets]
+    return -torch.mean(target_probs)
 
 
+
+    
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
     """Given a set of parameters, clip their combined gradients to have l2 norm at most max_l2_norm.
 
@@ -914,14 +963,30 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    # 步骤1: 计算所有参数梯度的总L2范数
+    total_norm = 0.0
+    for p in parameters:
+        if p.grad is not None:
+            # 累加每个梯度张量的L2范数的平方
+            param_norm = p.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+    
+    # 计算总L2范数（平方和的平方根）
+    total_norm = total_norm ** 0.5
+    if total_norm > max_l2_norm:
+        clip_coef = max_l2_norm / (total_norm + 1e-6) 
+        for p in parameters:
+            if p.grad is not None:
+                p.grad.data.mul_(clip_coef)
+
+
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return torch.optim.AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -968,7 +1033,25 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    # 1. 创建检查点字典，包含所有需要保存的信息
+    checkpoint = {
+        'iteration': iteration,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'timestamp': time.time(),  # 可选：记录保存时间
+        # 可以添加其他元数据
+    }
+    
+    # 2. 根据输出类型选择保存方式
+    if isinstance(out, (str, os.PathLike)):
+        # 文件路径：保存到指定路径
+        torch.save(checkpoint, out)
+    else:
+        # 文件对象：直接写入
+        torch.save(checkpoint, out)#test
+
+    
+
 
 
 def run_load_checkpoint(
@@ -989,7 +1072,22 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    # 1. 根据输入类型加载检查点
+    if isinstance(src, (str, os.PathLike)):
+        # 从文件路径加载
+        checkpoint = torch.load(src)
+    else:
+        # 从文件对象加载
+        checkpoint = torch.load(src)
+    
+    # 2. 恢复模型状态
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # 3. 恢复优化器状态
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    # 4. 返回之前的迭代次数
+    return checkpoint['iteration']
 
 
 def get_tokenizer(
