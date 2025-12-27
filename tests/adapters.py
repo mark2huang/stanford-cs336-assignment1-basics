@@ -31,15 +31,14 @@ def run_linear(
         in_dim (int): The size of the input dimension
         out_dim (int): The size of the output dimension
         weights (Float[Tensor, "d_out d_in"]): The linear weights to use
-        in_features (Float[Tensor, "... d_in"]): The output tensor to apply the function to
+        in_features (Float[Tensor, "... d_in"]): The output tensor to apply the function to   #batch_size,seq_len,d_model
 
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
     # 使用torch.matmul执行线性变换: y = xW^T
     # 其中in_features的形状是(..., d_in),weights.T的形状是(d_in, d_out)
-    ans=torch.matmul(in_features,weights.T)
+    ans=in_features @ weights.T
     return ans
 
 
@@ -61,8 +60,8 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    return weights[token_ids]
+    ans=weights[token_ids]
+    return ans
 
 
 def run_swiglu(
@@ -126,35 +125,30 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
+    print(f"Q shape: {Q.shape}")#4,12,64
+    print(f"K shape: {K.shape}")#4,16,64
+    print(f"V shape: {V.shape}")#4,16,64
+    print(f"mask shape: {mask.shape}")#4,12,16
 
-    #print("\n")
-    #print(f"Q shape: {Q.shape}")
-    #print(f"K shape: {K.shape}")
-    #print(f"V shape: {V.shape}")
+    # step1: calculate attention scores
+    attentionScores=Q@K.transpose(-2,-1)
 
-    # step1: 计算注意力分数矩阵
-    attentionMatrix = torch.einsum("... q d,...k d->...q k", Q, K)
-    #print(f"scores shape: {attentionMatrix.shape}")
+    #step2:normalize
+    d_k=Q.shape[-1]
+    attentionScores=attentionScores/torch.sqrt(torch.tensor(d_k,dtype=attentionScores.dtype))
 
-    # step2: 缩放
-    d_k = Q.shape[-1]
-    attentionMatrix = attentionMatrix / \
-        (torch.sqrt(torch.tensor(d_k, dtype=attentionMatrix.dtype)))
-    #print(f"缩放后 shape: {attentionMatrix.shape}")
+    print(f"mask={mask}")
 
-    # step3: 应用掩码(如果有）
+    #step3:apply mask
     if mask is not None:
-        attentionMatrix = attentionMatrix.masked_fill(~mask, -1e9)
-    #print(f"掩码后 shape: {attentionMatrix.shape}")
+        attentionScores = attentionScores.masked_fill(~mask, -1e9)
 
-    # step4: Softmax归一化
-    attentionMatrix = torch.softmax(attentionMatrix, dim=-1)
-    #print(f"Softmax后 shape: {attentionMatrix.shape}")
 
-    # step5: 加权求和
-    output = torch.einsum("... q k,...k d->... q d", attentionMatrix, V)
-    #print(f"最终输出 shape: {output.shape}")
+    #step4:softmax
+    softmaxAttentionScores=torch.softmax(attentionScores,dim=-1)
 
+    #step5:output
+    output=softmaxAttentionScores@V
     return output
 
 
@@ -190,23 +184,22 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
 
-    # 打印形状信息用于调试
-    #print(f"\nd_model: {d_model}, num_heads: {num_heads}")
-    #print(f"q_proj_weight: {q_proj_weight.shape}")
-    #print(f"k_proj_weight: {k_proj_weight.shape}")
-    #print(f"v_proj_weight: {v_proj_weight.shape}")
-    #print(f"o_proj_weight:{o_proj_weight.shape}")
-    #print(f"in_features:{in_features.shape}")
+
+    print(f"\nd_model: {d_model}, num_heads: {num_heads}")
+    print(f"q_proj_weight: {q_proj_weight.shape}")
+    print(f"k_proj_weight: {k_proj_weight.shape}")
+    print(f"v_proj_weight: {v_proj_weight.shape}")
+    print(f"o_proj_weight:{o_proj_weight.shape}")
+    print(f"in_features:{in_features.shape}")
 
     """
     tests/test_model.py::test_multihead_self_attention 
-    d_model: 64, num_heads: 4
+    num_heads: 4, d_k_per_head: 16，d_model: 64, 
     q_proj_weight: torch.Size([64, 64])
     k_proj_weight: torch.Size([64, 64])
     v_proj_weight: torch.Size([64, 64])
     o_proj_weight:torch.Size([64, 64])
     in_features:torch.Size([4, 12, 64])
-    q_proj_weight: torch.Size([64, 64])
 
     第一个64:d_k - 每个头的查询/键维度
     第二个64:d_in - 输入特征维度
@@ -220,66 +213,65 @@ def run_multihead_self_attention(
     第一个4:batch_size - 批次大小(4个样本)
     第二个12:sequence_length - 序列长度(12个token)
     第三个64:d_in - 输入特征维度(与投影权重的第二个维度匹配）
+
+
+    1. q_proj_weight - 投影权重矩阵
+    类型：权重参数（可训练的参数）
+    作用：将输入特征映射到查询向量：用于将输入特征转换为查询向量
+    形状：[d_k, d_in]（输出维度 × 输入维度）
+    2. Q 向量 - 查询向量
+    类型：计算得到的张量
+    作用：实际的查询向量，用于注意力计算
+    形状：[batch_size, seq_len, d_k]
     """
+    batch_size, seq_len, d_in = in_features.shape
+    d_q=q_proj_weight.shape[0]
+    d_k=k_proj_weight.shape[0]
+    d_v=v_proj_weight.shape[0]
 
-    # Step 1: 计算Q、K、V投影(所有头一起处理）
-    # [..., seq_len, d_model]
-    Q = in_features @ q_proj_weight.T
-    #print(f"Q.shape={Q.shape}")  # [batch=4, seq_len=12, d_k=64]
+    d_q_per_head=d_q //num_heads
+    d_k_per_head=d_k //num_heads
+    d_v_per_head=d_v //num_heads
 
-    # [..., seq_len, d_k * num_heads]
-    K = in_features @ k_proj_weight.T
-    #print(f"K.shape={K.shape}")
+    #step1:calcluate Q,K,V
+    Q=run_linear(d_in=d_in,d_out=d_k,weights=q_proj_weight,in_features=in_features) #4,12,64
+    K=run_linear(d_in=d_in,d_out=d_k,weights=k_proj_weight,in_features=in_features)
+    V=in_features @ v_proj_weight.T
 
-    # [..., seq_len, d_v * num_heads]
-    V = in_features @ v_proj_weight.T
-    #print(f"V.shape={V.shape}")
 
-    # 获取输入张量的形状信息
-    batch_size, seq_len, _ = in_features.shape
 
-    # 计算每个头的维度
-    d_k = d_model  # 所有头的总查询/键维度
-    d_v = d_model  # 所有头的总值维度
-    d_k_per_head = d_k // num_heads  # 每个头的查询/键维度
-    d_v_per_head = d_v // num_heads  # 每个头的值维度
 
-    #print(f"d_k (total): {d_k}, d_v (total): {d_v}")
-    #print(f"d_k_per_head: {d_k_per_head}, d_v_per_head: {d_v_per_head}")
+    #step2:reshape
+    Q=Q.view(batch_size,seq_len,num_heads,d_k_per_head)#4,12,4,16
+    K=K.view(batch_size,seq_len,num_heads,d_k_per_head)#4,12,4,16
+    V=V.view(batch_size,seq_len,num_heads,d_v_per_head)#4,12,4,16
 
-    # step2:将投影后的张量重新组织为多头格式
-    # 当前形状:[batch_size, seq_len, d_k] 目标形状:[batch_size, num_heads, seq_len, d_k_per_head]
-    # 注意:标准实现中,多头重组应该按照 [batch_size, seq_len, num_heads, d_k_per_head] 然后 transpose(1, 2)
-    Q = Q.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
-    K = K.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
-    V = V.view(batch_size, seq_len, num_heads, d_v_per_head).transpose(1, 2)
-    # [batch_size, num_heads, seq_len, d_k_per_head/d_v_per_head]
-    #print(f"Q.shape={Q.shape}")
-    #print(f"K.shape={K.shape}")
-    #print(f"V.shape={V.shape}")
 
-    # step3:计算注意力矩阵
-    # Q: [batch_size, num_heads, seq_len, d_k_per_head] x K^T: [batch_size, num_heads, d_k_per_head, seq_len]
-    # = [batch_size, num_heads, seq_len, seq_len]
-    attention_scores = Q @ K.transpose(-2, -1)
-    #print(f"attention_scores.shape={attention_scores.shape}")
+    #step3:Transformer standard format of Q,K,V
+    Q=Q.transpose(1,2)#4,4,12,16
+    K=K.transpose(1,2)
+    V=V.transpose(1,2)
 
-    # step4:缩放
-    attention_scores = attention_scores / \
-        torch.sqrt(torch.tensor(d_k_per_head, dtype=attention_scores.dtype))
-    #print(f"缩放之后attention_scores.shape={attention_scores.shape}")
 
-    # step5:softmax
-    attention_weights = torch.softmax(attention_scores, dim=-1)
-    #print(f"softmax之后attention_weights.shape={attention_weights.shape}")
+    #step4:attention scores
+    attentionScores=Q @ K.transpose(-2,-1)
 
-    # step6:乘以V   [batch_size, num_heads, seq_len, seq_len] @ [batch_size, num_heads, seq_len, d_v_per_head]
-    # = [batch_size, num_heads, seq_len, d_v_per_head]
-    tmp_output = attention_weights @ V
-    #print(f"tmp_output.shape={tmp_output.shape}")
+    #step5:scale
+    attentionScores=attentionScores/torch.sqrt(torch.tensor(d_k_per_head, dtype=attentionScores.dtype))
+
+    # step 5.5: mask
+    mask = torch.tril(torch.ones(seq_len, seq_len, device=attentionScores.device)).bool()
+    attentionScores = attentionScores.masked_fill(mask == 0, float('-inf'))
+
+    #step6:softmax
+    softmaxAttentionScores=torch.softmax(attentionScores, dim=-1)
+
+    #step7:output
+    tmp_output=softmaxAttentionScores @ V
 
     # step7: 合并多头输出
     # 当前形状: [batch_size, num_heads, seq_len, d_v_per_head] → 目标形状: [batch_size, seq_len, d_v]
+
     output = tmp_output.transpose(
         1, 2).contiguous().view(batch_size, seq_len, d_v)
     #print(f"合并多头输出之后output.shape={output.shape}")
@@ -288,6 +280,8 @@ def run_multihead_self_attention(
     output = output @ o_proj_weight.T
     #print(f"投影到输出维度之后output.shape={output.shape}")
     return output
+    
+
 
 
 def run_multihead_self_attention_with_rope(
@@ -391,6 +385,11 @@ def run_multihead_self_attention_with_rope(
     # [batch_size, num_heads, seq_len, seq_len]
     attention_scores = attention_scores / (d_k_per_head ** 0.5)
 
+    #步骤5.5 应用因果掩码 ！！！
+    # 生成一个下三角因果掩码，确保位置i只能关注到位置j<=i
+    mask = torch.tril(torch.ones(seq_len, seq_len, device=attention_scores.device)).bool()
+    attention_scores = attention_scores.masked_fill(~mask, float('-inf'))
+
     # 步骤6: 应用Softmax得到注意力权重
     # [batch_size, num_heads, seq_len, seq_len]
     attention_weights = torch.softmax(attention_scores, dim=-1)
@@ -450,6 +449,7 @@ def run_rope(
     [[0.5, 0.6, 0.7, 0.8]],    # "love" 的嵌入向量  
     [[0.9, 1.0, 1.1, 1.2]]     # "apple" 的嵌入向量
     ])
+    RoPE不是直接修改词向量,而是在计算注意力时对查询向量(Q)和键向量(K)进行旋转
 
 
     # 将d_k=4分成2对复数 [实部, 虚部]
@@ -492,8 +492,11 @@ def run_rope(
     ], dim=-1)
 
 
+    [[0.1, 0.2, 0.3, 0.4]],    # "I" 的嵌入向量
+    [[0.5, 0.6, 0.7, 0.8]],    # "love" 的嵌入向量  
+    [[0.9, 1.0, 1.1, 1.2]]     # "apple" 的嵌入向量
 
-        # 第1对复数: [0.1, 0.2] → 旋转0°
+    # 第1对复数: [0.1, 0.2] → 旋转0°
     新实部 = 0.1x1.0 - 0.2x0.0 = 0.1
     新虚部 = 0.1x0.0 + 0.2x1.0 = 0.2
     # 结果: [0.1, 0.2] (不变,因为位置0不旋转)
@@ -504,7 +507,7 @@ def run_rope(
     # 结果: [0.3, 0.4] (不变)
 
 
-        # 第1对复数: [0.5, 0.6] → 旋转1°
+    # 第1对复数: [0.5, 0.6] → 旋转1°
     新实部 = 0.5x0.9998 - 0.6x0.0175 ≈ 0.4999 - 0.0105 = 0.4894
     新虚部 = 0.5x0.0175 + 0.6x0.9998 ≈ 0.0088 + 0.5999 = 0.6087
     # 结果: [0.4894, 0.6087] (轻微旋转)
@@ -540,57 +543,53 @@ def run_rope(
     不同频率维度:旋转速度不同(高频维度旋转快,低频维度旋转慢）
     这样,模型就能通过旋转角度来区分不同位置的相同词汇,实现位置编码的效果！
     """
-    #step1: 获取输入张量的形状
-    #print(f"\n in_query_or_key.shape={in_query_or_key.shape}") #[4,12,64]
-    batchsize=in_query_or_key.shape[0] #4
-    seqlen=in_query_or_key.shape[1] #12
-    d_k=in_query_or_key.shape[2] #64
-
-    #step2: 确认嵌入维度是偶数
-    if d_k %2!=0:
+    
+    #step1:确认嵌入维度是偶数
+    batch_size, seq_len, d_k = in_query_or_key.shape
+    if d_k%2!=0:
         raise ValueError("d_k must be even for RoPE")
     
-    #step3: 计算旋转角度 角度 = token索引 x θ^(-2i/d)​​
-    #token_positions token_positions=tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11]),token_positions.shape=torch.Size([12])
-    #print(f"token_positions={token_positions},token_positions.shape={token_positions.shape}")
+    #step2:确认旋转角度theta, 频率计算: θ^(-2i/d_k) 
+    i = torch.arange(0, d_k//2, dtype=torch.float32, device=in_query_or_key.device)
+    freqs = theta ** (-2 * i / d_k)  # 形状 [d_k//2]
 
-    freqs=[]
-    for i in range(0,d_k//2):
-        freqs.append(math.pow(theta,(-2*i)/d_k))
-
-    #print(f"freqs={freqs},freqs.shape={len(freqs)}")
-    angles=[]
-    # 对每个token位置
-    for i in range(0,len(token_positions)):
-        position=token_positions[i]
-        #print(f"position={position}")
-        angle_row=[]
-        # 对每个维度
-        for freq_idx in range(0,len(freqs)):
-            angle=position*freqs[freq_idx]
-            angle_row.append(angle)
-        angles.append(angle_row)
-    #转化为向量
-    angles=torch.tensor(angles) #[12,32]
-    #print(f"angles={angles},angles.shape={angles.shape}")
+    # step3:扩展 freqs 以匹配最大序列长度
+    freqs = freqs.unsqueeze(0).expand(max_seq_len, -1)  # (max_seq_len, d_k // 2)
+    
+    # step4:创建位置索引
+    positions = torch.arange(max_seq_len).unsqueeze(1)          # (max_seq_len, 1)
+    
+    # 角度计算: 位置 x 频率
+    # Token "I" (位置0): [0x1.0=0°, 0x0.01=0°]
+    # Token "love" (位置1): [1x1.0=1°, 1x0.01=0.01°]  
+    # Token "apple" (位置2): [2x1.0=2°, 2x0.01=0.02°]
 
 
-    #step4: 创建旋转矩阵
-    cos_vals=torch.cos(angles) #[12,32]
-    sin_vals=torch.sin(angles) #[12,32]
+    # 步骤5: 计算角度 (向量化操作)
+    angles = positions * freqs  # 广播：形状 [*batch_dims, seq_len, d_k//2]
 
-    #step5:将输入张量视为复数对 [实部, 虚部]
-    x=in_query_or_key.view(batchsize,seqlen,d_k//2,2) #[4,12,32,2]
+    #step6:创建旋转矩阵
+    cos_emb=torch.cos(angles)
+    sin_emb=torch.sin(angles)
+    cos_emb, sin_emb = cos_emb[:seq_len], sin_emb[:seq_len]
 
-    #step6: 应用旋转矩阵
-    x_rotated = torch.stack([
-    x[..., 0] * cos_vals - x[..., 1] * sin_vals,  # 新的实部
-    x[..., 0] * sin_vals + x[..., 1] * cos_vals   # 新的虚部
-    ], dim=-1)
+    #step7:x转换成复数
+    x_even=in_query_or_key[...,::2]
+    x_odd=in_query_or_key[...,1::2]
 
-    #step7: 将旋转后的张量重新整形为原始形状
-    x_rotated=x_rotated.view(batchsize,seqlen,d_k) #[4,12,64]
-    return x_rotated
+    #step8:计算旋转
+    rotated_even = x_even * cos_emb - x_odd * sin_emb
+    rotated_odd = x_even * sin_emb + x_odd * cos_emb
+
+
+    # step9:重新组合维度
+    result = torch.zeros_like(in_query_or_key)
+    result[..., ::2] = rotated_even
+    result[..., 1::2] = rotated_odd
+
+    return result
+    
+    
 
 
 def run_transformer_block(
@@ -698,7 +697,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE \\Theta parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -823,7 +822,8 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    return in_features*torch.sigmoid(in_features)
+    output=in_features*torch.sigmoid(in_features)
+    return output
 
 
 def run_get_batch(
