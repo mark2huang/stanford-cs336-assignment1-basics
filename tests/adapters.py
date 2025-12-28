@@ -134,10 +134,8 @@ def run_scaled_dot_product_attention(
     attentionScores=Q@K.transpose(-2,-1)
 
     #step2:normalize
-    d_k=Q.shape[-1]
+    bact_szie,seq_len,d_k=Q.shape
     attentionScores=attentionScores/torch.sqrt(torch.tensor(d_k,dtype=attentionScores.dtype))
-
-    print(f"mask={mask}")
 
     #step3:apply mask
     if mask is not None:
@@ -148,8 +146,8 @@ def run_scaled_dot_product_attention(
     softmaxAttentionScores=torch.softmax(attentionScores,dim=-1)
 
     #step5:output
-    output=softmaxAttentionScores@V
-    return output
+    ans=softmaxAttentionScores@V
+    return ans
 
 
 def run_multihead_self_attention(
@@ -302,7 +300,7 @@ def run_multihead_self_attention_with_rope(
     implementation. This implementation should handle the key, query, and value projections
     for all heads in a single matrix multiply.
     This version of MHA should include RoPE.
-    In this case, the RoPE embedding dimension must be the head embedding dimension (d_model // num_heads).
+    In this case, tmust be the head embedding dimension (d_model // num_heads).
     See section 3.2.2 of Vaswani et al., 2017.
 
     Args:
@@ -322,60 +320,35 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     # 获取输入张量的形状
-    batch_size, seq_len, d_in = in_features.shape
+    batch_size, seq_len, d_in = in_features.shape #[4,12,64]
 
     # 计算每个头的维度
-    d_k = q_proj_weight.shape[0]  # 查询/键的总维度
-    d_v = v_proj_weight.shape[0]  # 值的总维度
-    d_k_per_head = d_k // num_heads  # 每个头的查询/键维度
+    d_k = q_proj_weight.shape[0]  # 查询/键的总维度 [64,64]
+    d_v = v_proj_weight.shape[0]  # 值的总维度 [64,64]
+    d_k_per_head = d_k // num_heads  # 每个头的查询/键维度 num_heads=4
     d_v_per_head = d_v // num_heads  # 每个头的值维度
 
+
     # 步骤1: 投影计算(单矩阵乘法）
-    Q = in_features @ q_proj_weight.T  # [batch_size, seq_len, d_k]
-    K = in_features @ k_proj_weight.T  # [batch_size, seq_len, d_k]
-    V = in_features @ v_proj_weight.T  # [batch_size, seq_len, d_v]
+    Q=run_linear(d_in,d_k,q_proj_weight,in_features)# [4,12,64]
+    K=run_linear(d_in,d_k,k_proj_weight,in_features)# [4,12,64]
+    V=run_linear(d_in,d_k,v_proj_weight,in_features)# [4,12,64]
+
 
     # 步骤2: 将投影后的张量重新组织为多头格式
     # 当前形状:[batch_size, seq_len, d_k] 目标形状:[batch_size, num_heads, seq_len, d_k_per_head]
-    Q = Q.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
+    Q = Q.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2) #[4,4,12,16]
     K = K.view(batch_size, seq_len, num_heads, d_k_per_head).transpose(1, 2)
-    # [batch_size, num_heads, seq_len, d_k_per_head]
 
     # V张量单独处理,因为不需要应用RoPE
     V = V.view(batch_size, seq_len, num_heads, d_v_per_head).transpose(1, 2)
-    # [batch_size, num_heads, seq_len, d_v_per_head]
+
 
     # 步骤3: 应用RoPE到Q和K(如果提供了位置信息）
     if token_positions is not None:
-        # 对每个头的Q和K应用RoPE,RoPE维度是每个头的维度
-        # 需要将多头张量重塑为 [batch_size * num_heads, seq_len, d_k_per_head]
-        Q_reshaped = Q.transpose(1, 2).contiguous().view(
-            batch_size * num_heads, seq_len, d_k_per_head)
-        K_reshaped = K.transpose(1, 2).contiguous().view(
-            batch_size * num_heads, seq_len, d_k_per_head)
+        Q = run_rope(d_k // num_heads, theta, seq_len, Q, token_positions)
+        K = run_rope(d_k // num_heads, theta, seq_len, K, token_positions)
 
-        # 扩展位置信息以匹配多头
-        # token_positions 的形状可能是 [1, seq_len] 或 [batch_size, seq_len]
-        if token_positions.shape[0] == 1:
-            # 如果是 [1, seq_len],扩展到 [batch_size * num_heads, seq_len]
-            pos_expanded = token_positions.repeat(batch_size * num_heads, 1)
-        else:
-            # 如果是 [batch_size, seq_len],扩展到 [batch_size * num_heads, seq_len]
-            pos_expanded = token_positions.unsqueeze(1).repeat(
-                1, num_heads, 1).view(batch_size * num_heads, seq_len)
-
-        # 应用RoPE
-        Q_rope = run_rope(d_k_per_head, theta, max_seq_len,
-                          Q_reshaped, pos_expanded)
-        K_rope = run_rope(d_k_per_head, theta, max_seq_len,
-                          K_reshaped, pos_expanded)
-
-        # 重塑回多头格式
-        Q = Q_rope.view(batch_size, num_heads, seq_len, d_k_per_head)
-        K = K_rope.view(batch_size, num_heads, seq_len, d_k_per_head)
-
-    # V已经在步骤2中正确重塑,不需要重复操作
-    # [batch_size, num_heads, seq_len, d_v_per_head]
 
     # 步骤4: 计算注意力分数 QK^T
     # [batch_size, num_heads, seq_len, seq_len]
@@ -545,7 +518,8 @@ def run_rope(
     """
     
     #step1:确认嵌入维度是偶数
-    batch_size, seq_len, d_k = in_query_or_key.shape
+    d_k=in_query_or_key.shape[-1]
+    seq_len=in_query_or_key.shape[-2]
     if d_k%2!=0:
         raise ValueError("d_k must be even for RoPE")
     
@@ -666,11 +640,49 @@ def run_transformer_block(
     """
     输入 → RMSNorm → 多头自注意力 → 残差连接 → RMSNorm → 前馈网络 → 残差连接 → 输出
     """
-    #step1:RSMNorm
-    #in_features=run_rmsnorm(d_model=d_model, eps=1e-5, weights=weights['ln1.weight'], in_features=in_features)
 
+    batch_size,seq_len,d_model=in_features.shape
 
-    raise NotImplementedError
+    #step1:第一个RMSNorm
+    in_features_fristRMSNorm=run_rmsnorm(d_model=d_model, eps=1e-5, weights=weights['ln1.weight'], in_features=in_features)
+
+    #step2:多头注意力
+    token_positions=torch.arange(seq_len).expand(batch_size,-1)
+    MHA=run_multihead_self_attention_with_rope(d_model=d_model,
+                                               num_heads=num_heads,
+                                               max_seq_len=seq_len,
+                                               theta=theta,
+                                               q_proj_weight=weights["attn.q_proj.weight"],
+                                               k_proj_weight=weights["attn.k_proj.weight"],
+                                               v_proj_weight=weights["attn.v_proj.weight"],
+                                               o_proj_weight=weights["attn.output_proj.weight"],
+                                               in_features=in_features_fristRMSNorm,
+                                               token_positions=token_positions)
+    
+    #step3:第一个残差连接
+    MHA_fristResidual=in_features+MHA
+
+    #step4:第二个RMSNorm
+    MHA_fristResidual_secondRMSNorm=run_rmsnorm(d_model=d_model,
+                                          eps=1e-5,
+                                          weights=weights['ln2.weight'],
+                                          in_features=MHA_fristResidual)
+    
+    #step5:前馈网络
+    FFN=run_swiglu(d_model=d_model,
+                   d_ff=d_ff,
+                   w1_weight=weights['ffn.w1.weight'],
+                   w2_weight=weights['ffn.w2.weight'],
+                   w3_weight=weights['ffn.w3.weight'],
+                   in_features=MHA_fristResidual_secondRMSNorm)
+    
+    #step6:第二个残差连接
+    FFN_secondRsidual=MHA_fristResidual+FFN
+
+    #step7:输出
+    output=FFN_secondRsidual
+    return output
+    
 
 
 def run_transformer_lm(
@@ -792,8 +804,7 @@ def run_rmsnorm(
 
     """
     
-    #print(f"\n in_features.shape={in_features.shape}") #[4,12,64]
-
+    print(f"\n in_features.shape={in_features.shape}") #[4,12,64]
     output=in_features.clone()
 
     #每一个batch
@@ -846,27 +857,26 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    #step1: 计算最大可用的其实索引，确保序列不会越界
-    max_start_index=len(dataset)-context_length
 
-    #step2：随机生成batch_size个起始索引
-    start_indices=torch.randint(0,max_start_index,(batch_size,))
-    #print(f"start_indices={start_indices}")
-
-    #step3:构建批次
-    inputs=[]
-    labels=[]
-    for i in start_indices:
-        input_seq=dataset[i:i+context_length]
-        label_seq=dataset[i+1:i+1+context_length]
-        inputs.append(input_seq)
-        labels.append(label_seq)
-
-    # step4: 转换为张量并移动到指定设备
-    inputs_tensor = torch.tensor(np.array(inputs), dtype=torch.long, device=device)
-    labels_tensor = torch.tensor(np.array(labels), dtype=torch.long, device=device)
+    #step1：从数据集中随机选择起始位置
+    max_start=len(dataset)-context_length
+    starts=np.random.randint(low=0,high=max_start,size=batch_size,dtype=int)
     
-    return inputs_tensor, labels_tensor
+    #step2: 根据起始位置获取输入序列和对应的标签
+    inputs=[]
+    labels=[] 
+    for start in starts:
+        input_seq=dataset[start:start+context_length]
+        labels_seq=dataset[start+1:start+1+context_length]
+        inputs.append(input_seq)
+        labels.append(labels_seq)
+
+    #step3:转换成pytorch张量并放到指定设备
+    inputs_tensor=torch.tensor(data=inputs,dtype=torch.long,device=device)
+    labels_tensor=torch.tensor(data=labels,dtype=torch.long,device=device)
+
+    
+    return inputs_tensor,labels_tensor
     
 
 
@@ -884,7 +894,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    """
+    
     print(f"\nin_features.shape={in_features.shape}") #[3,5]
     #safe_softmax
     #step1:计算每行最大值
@@ -894,8 +904,9 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
     exp_vals=torch.exp(in_features-max_values)
     #step3:计算softmax
     softmax_vals=exp_vals/torch.sum(exp_vals,dim=dim,keepdim=True)
-    """
-    return torch.softmax(in_features,dim=dim)
+    
+    return softmax_vals
+    #return torch.softmax(in_features,dim=dim)
 
 
 
@@ -920,12 +931,8 @@ def run_cross_entropy(
     targets: 形状为 [batch_size] 的真实标签索引
     """
     #step1:softmax得到概率分布
-    probs = torch.log_softmax(inputs, dim=1)
-    #print(f"\nprobs={probs}") 
-    #print(f"probs.shape={probs.shape}") #[8,5]
+    probs = torch.log_softmax(inputs, dim=1)  #[8,5]
 
-    #print(f"targets={targets}")
-    #print(f"targets.shape={targets.shape}")
     #step2:计算交叉熵
     batch_size=inputs.shape[0]
     """
@@ -963,21 +970,20 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    # 步骤1: 计算所有参数梯度的总L2范数
-    total_norm = 0.0
-    for p in parameters:
-        if p.grad is not None:
-            # 累加每个梯度张量的L2范数的平方
-            param_norm = p.grad.data.norm(2)
-            total_norm += param_norm.item() ** 2
-    
-    # 计算总L2范数（平方和的平方根）
-    total_norm = total_norm ** 0.5
-    if total_norm > max_l2_norm:
-        clip_coef = max_l2_norm / (total_norm + 1e-6) 
-        for p in parameters:
-            if p.grad is not None:
-                p.grad.data.mul_(clip_coef)
+    #step1:计算所有梯度的总L2范数=sqrt(∑∑(grad_ij)²)  # 对所有参数的所有梯度元素求和
+    total_norm_squared=0
+    for parameter in parameters:
+        if parameter.grad is not None:
+            total_norm_squared+=torch.sum(parameter.grad**2)
+    total_norm=torch.sqrt(total_norm_squared)
+
+    #step2:如果总范数超过最大值，按比列缩放所有梯度
+    if total_norm.item()>max_l2_norm:
+        scale_factor=max_l2_norm / total_norm.item()
+
+    for parameter in parameters:
+        if parameter.grad is not None:
+            parameter.grad=parameter.grad*scale_factor
 
 
 
@@ -988,7 +994,7 @@ def get_adamw_cls() -> Any:
     """
     return torch.optim.AdamW
 
-
+import math
 def run_get_lr_cosine_schedule(
     it: int,
     max_learning_rate: float,
@@ -1014,7 +1020,24 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    #stage1:线性预热（0 ≤ it < warmup_iters）
+    #stage2:余弦退火（warmup_iters ≤ it ≤ warmup_iters + cosine_cycle_iters）
+    """
+    进度 = (it - warmup_iters) / cosine_cycle_iters
+    余弦衰减 = 0.5 * (1 + cos(π * 进度))
+    学习率 = min_lr + (max_lr - min_lr) * 余弦衰减
+    """
+    #stage3:平稳学习率
+    if it<warmup_iters:
+        learning_rate = max_learning_rate * it / warmup_iters
+    elif it<=cosine_cycle_iters:
+        process=( it - warmup_iters)/(cosine_cycle_iters - warmup_iters)
+        cos_value = np.cos(np.pi * process)
+        learning_rate = min_learning_rate + 0.5 * (max_learning_rate - min_learning_rate) * (1 + cos_value)
+    else:
+        learning_rate=min_learning_rate
+
+    return learning_rate
 
 
 def run_save_checkpoint(
@@ -1035,19 +1058,17 @@ def run_save_checkpoint(
     """
     # 1. 创建检查点字典，包含所有需要保存的信息
     checkpoint = {
-        'iteration': iteration,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'timestamp': time.time(),  # 可选：记录保存时间
-        # 可以添加其他元数据
+        'iteration': iteration,#记录训练到第几步，用于恢复时知道从哪里继续
+        'model_state_dict': model.state_dict(),#保存模型的所有可学习参数（权重、偏置等）
+        'optimizer_state_dict': optimizer.state_dict(),#保存优化器的所有状态信息（如动量、学习率等）
+        'timestamp': time.time(),  # 记录保存时间，用于版本管理
+        
     }
     
     # 2. 根据输出类型选择保存方式
     if isinstance(out, (str, os.PathLike)):
-        # 文件路径：保存到指定路径
         torch.save(checkpoint, out)
     else:
-        # 文件对象：直接写入
         torch.save(checkpoint, out)#test
 
     
