@@ -38,8 +38,7 @@ def run_linear(
     """
     # 使用torch.matmul执行线性变换: y = xW^T
     # 其中in_features的形状是(..., d_in),weights.T的形状是(d_in, d_out)
-    ans=in_features @ weights.T
-    return ans
+    return in_features @ weights.T
 
 
 def run_embedding(
@@ -60,8 +59,7 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-    ans=weights[token_ids]
-    return ans
+    return weights[token_ids]
 
 
 def run_swiglu(
@@ -125,16 +123,16 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    print(f"Q shape: {Q.shape}")#4,12,64
-    print(f"K shape: {K.shape}")#4,16,64
-    print(f"V shape: {V.shape}")#4,16,64
-    print(f"mask shape: {mask.shape}")#4,12,16
+    #print(f"Q shape: {Q.shape}")#4,12,64
+    #print(f"K shape: {K.shape}")#4,16,64
+    #print(f"V shape: {V.shape}")#4,16,64
+    #print(f"mask shape: {mask.shape}")#4,12,16
 
     # step1: calculate attention scores
     attentionScores=Q@K.transpose(-2,-1)
 
     #step2:normalize
-    bact_szie,seq_len,d_k=Q.shape
+    d_k=Q.shape[-1]
     attentionScores=attentionScores/torch.sqrt(torch.tensor(d_k,dtype=attentionScores.dtype))
 
     #step3:apply mask
@@ -764,7 +762,34 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    #step1:获取token_embeddings,即将token转换为embedding之后的向量
+    token_embeddings=run_embedding(vocab_size,d_model,weights['token_embeddings.weight'],in_indices) #[batch_size,sequence_length,d_model]=[4,12,64]
+    batch_size,seq_len,d_model=token_embeddings.shape
+    #step2:构建多层transformer block，将embedding之后的token输入transformer block
+    for layer_idx in range(num_layers):
+        #构建当前层的权重字典
+        layer_weights={
+        'attn.q_proj.weight':weights[f'layers.{layer_idx}.attn.q_proj.weight'],
+        'attn.k_proj.weight':weights[f'layers.{layer_idx}.attn.k_proj.weight'],
+        'attn.v_proj.weight':weights[f'layers.{layer_idx}.attn.v_proj.weight'],
+        'attn.output_proj.weight':weights[f'layers.{layer_idx}.attn.output_proj.weight'],
+        'ln1.weight':weights[f'layers.{layer_idx}.ln1.weight'],
+        'ffn.w1.weight':weights[f'layers.{layer_idx}.ffn.w1.weight'],
+        'ffn.w2.weight':weights[f'layers.{layer_idx}.ffn.w2.weight'],
+        'ffn.w3.weight':weights[f'layers.{layer_idx}.ffn.w3.weight'],
+        'ln2.weight':weights[f'layers.{layer_idx}.ln2.weight'],
+        }
+        # 注意这里将当前层的输出赋值给token_embeddings，作为下一层的输入，因为左边只能是token_embeddings
+        token_embeddings=run_transformer_block(d_model,num_heads,d_ff,context_length,rope_theta,layer_weights,token_embeddings)
+
+    #step3:将多层transformer输出通过RMSNorm
+    final_output=run_rmsnorm(d_model=d_model,eps=1e-5,weights=weights['ln_final.weight'],in_features=token_embeddings)
+    logits=run_linear(d_in=d_model,d_out=vocab_size,weights=weights['lm_head.weight'],in_features=final_output) #[batch_size, sequence_length, vocab_size]=[4,12,10000]
+
+
+    return logits
+    
+    
 
 
 def run_rmsnorm(
@@ -803,8 +828,7 @@ def run_rmsnorm(
         weights 是可学习的缩放参数
 
     """
-    
-    print(f"\n in_features.shape={in_features.shape}") #[4,12,64]
+
     output=in_features.clone()
 
     #每一个batch
@@ -1131,36 +1155,255 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
- # 1. 创建你的 BpeTokenizer 的一个实例
-    tokenizer = BpeTokenizer()
+    
 
-    # 2. 配置 tokenizer 的状态
-    # 测试传入的 vocab 是 {id: bytes},我们需要 {bytes: id} 用于编码
-    # 和 {id: bytes} 用于解码
-    tokenizer.vocab = {token_bytes: token_id for token_id,
-                       token_bytes in vocab.items()}
-    tokenizer.inverse_vocab = vocab
+    return BpeTokenizer(vocab,merges,special_tokens)
 
-    # 直接使用传入的合并规则
-    tokenizer.merges = merges
 
-    # 3. 处理特殊 token
-    if special_tokens:
-        special_tokens_bytes = [token.encode(
-            'utf-8') for token in special_tokens]
-        tokenizer.special_tokens = set(special_tokens_bytes)
+class BpeTokenizer:
+    def __init__(
+        self,
+        vocab: dict[int, bytes],
+        merges: list[tuple[bytes, bytes]],
+        special_tokens: list[str] | None = None,
+    ):
+        """
+        Construct a BPE tokenizer from a given vocabulary, list of merges, and (optionally) special tokens.
+        
+        Args:
+            vocab: A dictionary mapping token IDs to their byte representations.
+            merges: A list of tuples representing BPE merge operations.
+            special_tokens: Optional list of strings that should be treated as unbreakable tokens.
+        """
 
-        # 将特殊 token 添加到词汇表中(如果它们不存在）
-        # 测试代码已经保证了这一点,但双重检查更稳健
-        for token_bytes in special_tokens_bytes:
-            if token_bytes not in tokenizer.vocab:
-                new_id = len(tokenizer.vocab)
-                tokenizer.vocab[token_bytes] = new_id
-                tokenizer.inverse_vocab[new_id] = token_bytes
 
-    # 4. 返回配置好的、可供使用的 tokenizer 实例
-    return tokenizer
-    raise NotImplementedError
+        """
+        # 定义词汇表和合并规则
+        vocab = {
+            0: b"<|endoftext|>",
+            1: b" the",
+            2: b"ing",
+            3: b" apple",
+            # ... 其他词汇
+        }
+
+        #合并规则
+        merges = [
+            (b"a", b"p"),      # 合并 a + p → ap
+            (b"ap", b"p"),     # 合并 ap + p → app
+            (b"app", b"l"),    # 合并 app + l → appl
+            (b"appl", b"e"),   # 合并 appl + e → apple
+        ]
+
+        # 特殊标记列表
+        special_tokens = [
+            "<|endoftext|>",    # 文本结束标记
+            "<|pad|>",          # 填充标记（用于对齐序列长度）
+            "<|unk|>",          # 未知词汇标记
+            "<|bos|>",          # 文本开始标记
+            "<|eos|>",          # 文本结束标记
+            "<|mask|>",         # 掩码标记(用于BERT等模型)
+        ]
+        """
+        self.vocab=vocab
+        self.merges=merges
+
+        #step1:将vocab中{tokenid:token}的字典反转为{token:tokenid}的字典
+        self.byte_to_token_id={v:k for k,v in vocab.items()}
+
+        #step2:将特殊token转换为字节表示
+        self.special_tokens=special_tokens or []
+        self.special_token_bytes=[token.encode("utf-8") for token in self.special_tokens]
+
+       
+        #step3:bpe_rank
+        self.bpe_ranks = dict(zip(merges, range(len(merges))))
+        #print(f"bpe_ranks: {self.bpe_ranks}")
+        """
+        (b' re', b'claimed'): 49969, (b' interesting', b'ly'): 49970, (b'\xd7', b'\xa9'): 49971
+        """
+
+        #step4:确认special_token在vocab中，如果不在，就添加入vocab
+        for token in self.special_token_bytes:
+            if token not in self.byte_to_token_id:
+                self.vocab[len(self.vocab)]=token
+                self.byte_to_token_id[token]=len(self.vocab)-1
+
+    #step5:BPE核心函数，处理普通文本
+    def BPE(self, text: str) -> list[int]:
+        """
+        Tokenize a normal piece of text (not a special token) into token IDs.
+        
+        Args:
+            text: A string to tokenize.
+            
+        Returns:
+            A list of token IDs representing the tokenized text.
+        """
+        pre_tokens=[]
+        for m in re.finditer(PAT,text):
+            word=m.group(0)
+            pre_tokens.append(word)
+        token_ids=[]
+        for word in pre_tokens:
+            byte_tuple=to_bytes_tuple(word)
+            merged=self._apply_merges(byte_tuple)
+            token_ids.extend(self.byte_to_token_id[b] for b in merged)
+        return token_ids
+
+
+
+
+    #step6:定义encode函数
+    def encode1(self, text: str) -> list[int]:
+        """
+        Encode an input text string into a sequence of token IDs.
+        
+        Args:
+            text: The input text to encode.
+            
+        Returns:
+            A list of integer token IDs representing the encoded text.
+        """
+        pass
+    
+    
+
+
+    def encode(self, text: str) -> list[int]:
+        """
+        Encode an input text string into a sequence of token IDs.
+        
+        Args:
+            text: The input text to encode.
+            
+        Returns:
+            A list of integer token IDs representing the encoded text.
+        """
+        tokens = []
+
+        # Sort special tokens by length (longest first) to avoid partial matches
+        sorted_special_tokens = sorted(self.special_tokens, key=len, reverse=True)
+        pattern = "|".join(map(re.escape, sorted_special_tokens))
+        if pattern:
+            parts = re.split(f"({pattern})", text)
+        else:
+            parts = [text]
+
+        for part in parts:
+            if part in self.special_tokens:
+                # If it's a special token, add its ID directly
+                tokens.append(self.byte_to_token_id[part.encode("utf-8")])
+            else:
+                # Otherwise, tokenize normally using BPE
+                tokens.extend(self.BPE(part))
+
+        return tokens
+
+    def encode_iterable(self, iterable: Iterable[str]) -> iter:
+        """
+        Given an iterable of strings (e.g., a file handle), yield token IDs lazily.
+        
+        Args:
+            iterable: An iterable source of text chunks.
+            
+        Yields:
+            Token IDs generated by processing the input iterable.
+        """
+        for chunk in iterable:
+            yield from self.encode(chunk)
+
+
+    def decode(self, ids: list[int]) -> str:
+        """
+        Decode a sequence of token IDs back into a human-readable string.
+        
+        Args:
+            ids: A list of integer token IDs.
+            
+        Returns:
+            The decoded string representation of the input token IDs.
+        """
+        # Concatenate all token bytes
+        full_bytes = b"".join(self.vocab[token_id] for token_id in ids)
+        
+        # Decode bytes to string, replacing invalid sequences
+        return full_bytes.decode("utf-8", errors="replace")
+
+
+    def _apply_merges(self, byte_tuple: tuple[bytes, ...]) -> list[bytes]:
+        """
+        Apply BPE merges to a sequence of bytes.
+        
+        Args:
+            byte_tuple: A tuple of single-byte tokens.
+            
+        Returns:
+            A list of merged byte tokens after applying all applicable merges.
+        """
+        word: list[bytes] = list(byte_tuple)
+
+        def get_pairs(word: list[bytes]):
+            pairs = set()
+            prev_char = word[0]
+            for char in word[1:]:
+                pairs.add((prev_char, char))
+                prev_char = char
+            return pairs
+        
+        pairs = get_pairs(word)
+
+        if not pairs:
+            return word
+
+        while True:
+            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float('inf')))
+            if bigram not in self.bpe_ranks:
+                break
+            
+            first, second = bigram
+            new_word = []
+            i = 0
+            while i < len(word):
+                try:
+                    j = word.index(first, i)
+                except ValueError:
+                    new_word.extend(word[i:])
+                    break
+                else:
+                    new_word.extend(word[i:j])
+                    i = j
+
+                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+                    new_word.append(first + second)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            new_word = tuple(new_word)
+            word = new_word
+            if len(word) == 1:
+                break
+            else:
+                pairs = get_pairs(word)
+
+        return word
+
+
+import regex as re
+
+import os
+from collections import defaultdict, Counter
+from typing import Dict, List, Tuple, Union, Iterable, Optional
+##### Helper functions #####
+
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+def to_bytes_tuple(word: str) -> Tuple[bytes]:
+    l = list(word.encode("utf-8"))
+    l = [bytes([x]) for x in l]
+    return tuple(l)
+
+##### Helper functions #####
 
 
 def run_train_bpe(
@@ -1190,4 +1433,87 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    # Step 1: Initialize Vocabulary
+    vocab: Dict[int, bytes] = {i: bytes([i]) for i in range(256)}
+    next_id = 256
+
+    special_token_bytes = [token.encode("utf-8") for token in special_tokens]
+    for token_bytes in special_token_bytes:
+        if token_bytes not in vocab.values():
+            vocab[next_id] = token_bytes
+            next_id += 1
+
+    # Step 2: Pre-tokenization
+    pre_tokens_cnt = defaultdict(int)
+
+    def to_bytes_tuple(word: str) -> Tuple[bytes]:
+        l = list(tuple(word.encode("utf-8")))
+        l = [bytes([x]) for x in l]
+        return tuple(l)
+
+    with open(input_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    
+    chunks = re.split("|".join(map(re.escape, special_tokens)), text)
+    
+    for chunk in chunks:
+        for m in re.finditer(PAT, chunk):
+            word = m.group(0)
+            pre_tokens_cnt[to_bytes_tuple(word)] += 1   # key of pre_tokens_cnt e.g. (b'H', b'e', b'l', b'l', b'o')
+
+    # Step 3: Compute BPE Merges
+    merges = []
+
+    while len(vocab) < vocab_size:
+        pair_counts = defaultdict(int)
+
+        # Count all adjacent byte pairs
+        for token, cnt in pre_tokens_cnt.items():
+            for i in range(len(token) - 1):
+                pair = (token[i], token[i + 1])
+                pair_counts[pair] += cnt
+
+        if not pair_counts:
+            break  # No more pairs to merge
+
+        # Find the most frequent pair(s)
+        max_count = max(pair_counts.values())
+        candidates = [k for k, v in pair_counts.items() if v == max_count]
+        best_pair = max(candidates)
+
+        a, b = best_pair
+
+        # Create new token
+        new_token = a + b
+        vocab[next_id] = new_token
+        next_id += 1
+
+        # Apply the merge to all pre-tokenized sequences
+        # 收集变更
+        changes = []
+        for token, cnt in pre_tokens_cnt.items():
+            # Find all occurrences of the `best_pair` in `token`
+            indices = [i for i in range(len(token) - 1) if token[i:i + 2] == best_pair]
+            if indices:
+                # Replace each occurrence with `new_token`
+                new_pre_token = []
+                i = 0
+                while i < len(token):
+                    if i in indices:
+                        new_pre_token.append(new_token)
+                        i += 2
+                    else:
+                        new_pre_token.append(token[i])
+                        i += 1
+                new_pre_token = tuple(new_pre_token)
+                changes.append((token, new_pre_token, cnt))
+
+        # 应用变更
+        for old_token, new_pre_token, cnt in changes:
+            pre_tokens_cnt[new_pre_token] = pre_tokens_cnt.get(new_pre_token, 0) + cnt
+            del pre_tokens_cnt[old_token]
+
+        # Record the merge
+        merges.append((a, b))
+
+    return vocab, merges
