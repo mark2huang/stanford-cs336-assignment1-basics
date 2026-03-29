@@ -180,6 +180,22 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
 
+    """
+    tests/test_model.py::test_multihead_self_attention 
+    num_heads: 4, d_k_per_head: 16,d_model: 64, 
+    q_proj_weight: torch.Size([64, 64])
+    k_proj_weight: torch.Size([64, 64])
+    v_proj_weight: torch.Size([64, 64])
+    o_proj_weight:torch.Size([64, 64])
+    in_features:torch.Size([4, 12, 64])
+
+    q_proj_weight (Float[Tensor, "d_k d_in"]): Weights for the Q projection
+    d_in:必须等于输入特征的维度（在上面的例子中是 5)。因为矩阵乘法必须满足 [..., d_in] @ [d_in, d_k]。
+    d_k:它是我们期望映射后的 Query 向量的总维度大小。
+    假设我们希望将原本 5 维的输入，映射成 8 维的 Query 向量，那么 q_proj_weight 的形状就是 [8, 5]。
+    当执行 in_features @ q_proj_weight.T 时，维度变化是：[2, 4, 5] @ [5, 8] -> [2, 4, 8]。这 8 维随后会被拆分给多个头（比如 2 个头，每个头分到 4 维）。
+
+    """
 
     print(f"\nd_model: {d_model}, num_heads: {num_heads}")
     print(f"q_proj_weight: {q_proj_weight.shape}")
@@ -188,95 +204,41 @@ def run_multihead_self_attention(
     print(f"o_proj_weight:{o_proj_weight.shape}")
     print(f"in_features:{in_features.shape}")
 
-    """
-    tests/test_model.py::test_multihead_self_attention 
-    num_heads: 4, d_k_per_head: 16，d_model: 64, 
-    q_proj_weight: torch.Size([64, 64])
-    k_proj_weight: torch.Size([64, 64])
-    v_proj_weight: torch.Size([64, 64])
-    o_proj_weight:torch.Size([64, 64])
-    in_features:torch.Size([4, 12, 64])
-
-    第一个64:d_k - 每个头的查询/键维度
-    第二个64:d_in - 输入特征维度
-    关键理解:虽然 q_proj_weight 形状是 [64, 64],但这实际上是所有头的投影权重合并在一起。因为 num_heads = 4,所以:
-    每个头的实际维度:d_k_per_head = 64 / 4 = 16
-    总投影权重大小:d_k = 16 x 4 = 64
-
-    2. 输入特征形状:[4, 12, 64]
-    in_features: torch.Size([4, 12, 64])
-
-    第一个4:batch_size - 批次大小(4个样本)
-    第二个12:sequence_length - 序列长度(12个token)
-    第三个64:d_in - 输入特征维度(与投影权重的第二个维度匹配）
-
-
-    1. q_proj_weight - 投影权重矩阵
-    类型：权重参数（可训练的参数）
-    作用：将输入特征映射到查询向量：用于将输入特征转换为查询向量
-    形状：[d_k, d_in]（输出维度 × 输入维度）
-    2. Q 向量 - 查询向量
-    类型：计算得到的张量
-    作用：实际的查询向量，用于注意力计算
-    形状：[batch_size, seq_len, d_k]
-    """
-    batch_size, seq_len, d_in = in_features.shape
-    d_q=q_proj_weight.shape[0]
-    d_k=k_proj_weight.shape[0]
-    d_v=v_proj_weight.shape[0]
-
-    d_q_per_head=d_q //num_heads
-    d_k_per_head=d_k //num_heads
-    d_v_per_head=d_v //num_heads
-
-    #step1:calcluate Q,K,V
-    Q=run_linear(d_in=d_in,d_out=d_k,weights=q_proj_weight,in_features=in_features) #4,12,64
-    K=run_linear(d_in=d_in,d_out=d_k,weights=k_proj_weight,in_features=in_features)
-    V=in_features @ v_proj_weight.T
-
-
-
+    #step1:calculate Q,K,V
+    Q=in_features@q_proj_weight.T #4,12,64
+    K=in_features@k_proj_weight.T
+    V=in_features@v_proj_weight.T
 
     #step2:reshape
-    Q=Q.view(batch_size,seq_len,num_heads,d_k_per_head)#4,12,4,16
-    K=K.view(batch_size,seq_len,num_heads,d_k_per_head)#4,12,4,16
-    V=V.view(batch_size,seq_len,num_heads,d_v_per_head)#4,12,4,16
+    batch_size,seq_len,d_model=Q.shape
+    d_k=q_proj_weight.shape[0]
+    d_per_head=d_k//num_heads
+    d_in=q_proj_weight.shape[0]
 
 
-    #step3:Transformer standard format of Q,K,V
+    Q=Q.view(batch_size,seq_len,num_heads,d_per_head) #4,12,4,16
     Q=Q.transpose(1,2)#4,4,12,16
+    K=K.view(batch_size,seq_len,num_heads,d_per_head) 
     K=K.transpose(1,2)
+    V=V.view(batch_size,seq_len,num_heads,d_per_head) 
     V=V.transpose(1,2)
 
-
-    #step4:attention scores
-    attentionScores=Q @ K.transpose(-2,-1)
-
-    #step5:scale
-    attentionScores=attentionScores/torch.sqrt(torch.tensor(d_k_per_head, dtype=attentionScores.dtype))
-
-    # step 5.5: mask
+    #step3:calculate attentionScore
+    attentionScores=Q@K.transpose(-2,-1) #4,4,12,12
+    #step4:normalize
+    attentionScores=attentionScores/math.sqrt(d_per_head)
+    #step5:mask
     mask = torch.tril(torch.ones(seq_len, seq_len, device=attentionScores.device)).bool()
     attentionScores = attentionScores.masked_fill(mask == 0, float('-inf'))
-
     #step6:softmax
-    softmaxAttentionScores=torch.softmax(attentionScores, dim=-1)
-
-    #step7:output
-    tmp_output=softmaxAttentionScores @ V
-
-    # step7: 合并多头输出
-    # 当前形状: [batch_size, num_heads, seq_len, d_v_per_head] → 目标形状: [batch_size, seq_len, d_v]
-
-    output = tmp_output.transpose(
-        1, 2).contiguous().view(batch_size, seq_len, d_v)
-    #print(f"合并多头输出之后output.shape={output.shape}")
-
-    # step8: 投影到输出维度
-    output = output @ o_proj_weight.T
-    #print(f"投影到输出维度之后output.shape={output.shape}")
+    attentionScores=torch.softmax(attentionScores,dim=-1)
+    #step6:output
+    output_temp=attentionScores@V
+    #step7:合并输出
+    output=output_temp.transpose(1,2).contiguous().view(batch_size,seq_len,d_model)
+    #step8:投影
+    output=output@o_proj_weight.T
     return output
-    
 
 
 
@@ -316,6 +278,8 @@ def run_multihead_self_attention_with_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
+    """
+
     """
     # 获取输入张量的形状
     batch_size, seq_len, d_in = in_features.shape #[4,12,64]
@@ -378,6 +342,8 @@ def run_multihead_self_attention_with_rope(
     output = output @ o_proj_weight.T  # [batch_size, seq_len, d_model]
 
     return output
+    """
+    
 
 
 def run_rope(
