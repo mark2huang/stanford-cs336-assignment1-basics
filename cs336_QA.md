@@ -1,9 +1,9 @@
 # stanford cs336 assignment1~5 Q&A
 
-## Apple 上海 Deep Learning 面试
+## Apple 上海 AI infra 面试
 ## 硬核通关题
 
-你好，请端正坐姿。现在我是 Apple Core ML 团队的 Hiring Manager，欢迎来到你的 Technical Interview。这  道题，是检验你 CS336 学习成果的试金石：
+你好，请端正坐姿。现在我是 Apple Core ML 团队的 Hiring Manager，欢迎来到你的 Technical Interview。这100道题，是检验你 CS336 学习成果的试金石：
 
 ## **【底层架构与数学推导】**
 
@@ -144,7 +144,7 @@ def run_multihead_self_attention(
   
 ```
 
-💻 追问学习：Multi-Head Attention 维度
+💻 追问1：Multi-Head Attention 维度
 
 - **Q,K,V这三个物理含义**：Q即query，表示要查询的信息，K即key，表示这个token所含有的信息密度，Q与K的点积代表着当前这个token与其他token的相关性，V即value，代表着token里面携带的信息，即需要被抽取出的信息，Q与K的点积得到当前token与其他token的相关性，根据相关性抽取对应token的信息
 
@@ -156,17 +156,19 @@ def run_multihead_self_attention(
 
 - **Attention Score** - “匹配度”：通过点积计算 Q 和 K 的相似度，决定了当前词应该从其他词那里“借”多少能量。
 
-  
+💻 追问2：**为什么 $Q, K$ 是 $d_k$，而 $V$ 是 $d_v$？**
 
-*   **为什么 $Q, K$ 是 $d_k$，而 $V$ 是 $d_v$？**
-    *   **本质逻辑：** $Q$ 和 $K$ 的作用是**计算权重（Attention Score）**。它们必须维度一致才能做点积。而 $V$ 的作用是**携带信息**。
-    *   **什么时候不一样？** 绝大多数模型（如 Llama, GPT）中，$d_k = d_v = d_{model} / num\_heads$。但在某些**压缩模型**或**多模态模型**中，为了减少显存占用，可以让 $V$ 的维度更小（$d_v < d_k$），即降维提取特征。
+*   **本质逻辑：** $Q$ 和 $K$ 的作用是**计算权重（Attention Score）**。它们必须维度一致才能做点积。而 $V$ 的作用是**携带信息**。
+*   **什么时候不一样？** 绝大多数模型（如 Llama, GPT）中，$d_k = d_v = d_{model} / num\_heads$。但在某些**压缩模型**或**多模态模型**中，为了减少显存占用，可以让 $V$ 的维度更小（$d_v < d_k$），即降维提取特征。
+
 *   **$d_{model}$ 和 $d_k, d_v$ 的关系：**
-    *   $d_{model}$ 是大模型的主干道宽度。
-    *   为了实现多头并行，我们将主干道切成 $H$ 份。
-    *   **关系式：** $d_{model} = num\_heads \times d_k$。如果不一样，通常是因为模型最后有一层 **Output Projection ($W_o$)**，它负责把切碎的 $d_v$ 拼起来后再映射回 $d_{model}$。
+    *   $d_{model}$ 是大模型的主干道宽度,为了实现多头并行，我们将主干道切成 $H$ 份。
+    *   **关系式：** $d_{model} = num\_heads \times d_k$。如果不一样，通常是因为模型最后有一层 **Output Projection ($W_o$)**，它负责把切碎的 $d_v$ 拼起来后再映射回 $d_{model}$
 
-*   **你在 Step 7 用了.contiguous()，为什么这个操作在多头注意力里是不可或缺的？如果不加会发生什么**
+
+
+💻 追问3：**你在 Step 7 用了.contiguous()，为什么这个操作在多头注意力里是不可或缺的？如果不加会发生什么**
+
 - 因为 transpose 操作只是改变了张量的**元数据或者叫做步长（Metadata/Stride）**，而在物理内存中，数据依然是按原始数组顺序排列的。接下来的 view 的操作前提是：逻辑上的相邻元素，在物理内存中也必须是相邻的。如果不调用 .contiguous()，PyTorch 会抛出运行时错误。
 
 - 数据搬运开销 (Data Movement Cost)：虽然 .contiguous() 解决了报错，但它本质上触发了一次 显存拷贝 (Memory Copy)。在 iPhone 的统一内存架构中，频繁的内存拷贝会显著增加功耗并占用带宽。因此，在端侧优化时，我们会尽量减少不必要的 transpose + contiguous 组合，或者尝试在算子融合（Operator Fusion）阶段，利用 Metal 或 Core ML 直接处理非连续内存。
@@ -174,6 +176,32 @@ def run_multihead_self_attention(
 - 算子合并 (Kernel Fusion)：“现在的 FlashAttention 等先进算子，通过把 transpose 逻辑直接写进算子内核里，避免了在 PyTorch 层面调用 .contiguous()，从而实现了零拷贝的性能提升。”
 
 - 内存对齐 (Memory Alignment)：“在 Apple NPU (ANE) 上，内存布局的连续性不仅关乎报错，还关乎 SIMD (单指令多数据) 指令的效率。非连续内存无法被向量化执行单元一次性读取，会导致吞吐量大幅下降。”
+
+
+
+💻 追问4：Apple 正在大规模部署端侧基础模型 (AFM)。业界（如 GPT）普遍抛弃了 T5 那种 Encoder-Decoder 双核架构，转向了 Decoder-Only 单核架构。从底层系统运行机制来看，Decoder-Only 是如何解决输入文本的‘编码（Encode）’问题的？这种架构在工程落地上带来了什么绝对的优势？
+
+**1.物理机制：伪装成预填充 (Prefill) 的 Encoder**
+“Decoder-Only 并没有丢失编码能力，而是将 Encode 动作折叠进了推理时的 **Prefill（预填充阶段）**。当 Prompt 输入时，系统会以极高的并行算力一次性处理整个序列，算出每一层的 K 和 V 矩阵，并将其固化在 GPU 显存中，这就是 **KV Cache**。在物理意义上，**留存在显存里的这段 KV Cache，就是传统 Encoder 吐出的那本‘全局特征字典’。**”
+
+**2. 核心工程收益：万物统一与显存管理**
+“砍掉 Encoder 和 Cross-Attention 带来了两项降维打击：
+
+- **网络同构性：** Block 结构完全均一，在相同的参数预算下模型可以做得更深，完美契合 Scaling Laws。
+- **内存池化调度：** 由于所有上下文都被统一抽象为了单一的 KV Cache，这就允许我们底层工程师引入 **PagedAttention（分页注意力）**，像操作系统管理虚拟内存一样切分物理显存块，将并发吞吐量 (Throughput) 拉到物理极限。”
+
+
+
+💻 追问5：在 Transformer 的注意力机制中，绝大多数开源模型的 $d_k$ 等于 $d_v$。作为 Infra 工程师，在什么极端的物理场景下我们会故意设置 $d_k \neq d_v$？另外，请溯源一下在经典的 Encoder-Decoder 的 Cross-Attention（交叉注意力）中，Q、K、V 三个张量的物理 I/O 到底来自哪里？
+
+**1. 路由溯源 (I/O Routing Debug)：**
+“关于 Cross-Attention 的数据流向，很多人存在认知倒置。正确的 I/O 路由是：**K 和 V 来自 Encoder，Q 来自 Decoder。**
+Encoder 负责生成被查询的底层特征载荷 (K/V 字典)，而 Decoder 负责根据当前生成的上下文，发出探测针 (Query) 去匹配 Encoder 的特征。”
+
+**2. 维度不对齐 ($d_k \neq d_v$) 的物理场景：VRAM 极限压缩**
+“之所以可以不对齐，是因为 $Q$ 和 $K$ 负责点积算分数，维度必须强校验一致 ($d_k$)；而 $V$ 是被提取的语义数据载荷 (Payload)，维度是 $d_v$。
+*   **压缩场景：** 当我们在端侧或高并发集群面临极端的 **VRAM 显存墙（Memory Wall）** 瓶颈时，我们会故意**降维 $d_v$ ($d_v < d_k$)**。
+*   **系统收益：** 因为缓存的是 K 和 V，把 $d_v$ 砍半，意味着 KV Cache 的显存印迹 (Memory Footprint) 会大幅缩减。即便损失了部分语义保真度，但能极大提升端侧推理效率。最终提取出的 $d_v$ 向量，只需通过输出投影矩阵 ($W_o$) 在计算图中映射回主干道维度 ($d_{model}$) 即可完成闭环。”
 
 ---
 
@@ -239,6 +267,50 @@ Point3：
 （2）**系统工程层面：** 引入 **PagedAttention（如 vLLM 框架）**，像操作系统的虚拟内存分页一样管理 KV Cache，解决显存碎片化问题；
 
 （3）**量化层面：** 对 KV Cache 进行 **INT8 或 FP8/INT4 量化**，直接将显存读写带宽减半。”
+
+
+
+💻 追问：**我写了一段算子，你怎么在数学上判断它到底是 Compute Bound 还是 Memory Bound？**还有compute wall和memory wall这两个概念也解释下
+
+一、 内存流派 (The Memory Domain)
+
+1. Memory Bound（内存受限 / I/O 瓶颈）
+
+*   **定义：** 你的计算单元（ALU/Tensor Core）算得太快了，但**数据从显存（HBM）搬运到计算核心（SRAM/寄存器）的速度太慢**。GPU 处于“无聊的等待状态（Starvation）”。
+*   **典型 AI 场景：大模型推理的 Decode（解码生成）阶段。**
+    *   每次只生成 1 个 Token，你需要把数百 GB 的模型权重和 KV Cache 从 HBM 搬到 SRAM 算一次，算完就扔掉。计算量极小，但数据搬运量极大。
+*   **解决代码：** 引入 PagedAttention 减少碎片、量化（AWQ/INT4）压缩权重体积、使用 Apple Silicon 的 UMA（统一内存架构）减少搬运。
+
+2. Memory Wall（内存墙 / 冯·诺依曼瓶颈）
+
+*   **定义：** 过去几十年，CPU/GPU 算力的增长速度（每年翻倍）**远远甩开了** 内存带宽和延迟的改进速度。算力与内存带宽之间的“剪刀差”越来越大，形成了一堵撞不过去的墙。
+*   **硬件解法：** 把内存和计算核心物理距离拉近（比如台积电的 CoWoS 2.5D 封装，把 HBM 直接和 GPU 封装在同一块基板上）。
+
+二、 计算流派 (The Compute Domain)
+
+1. Compute Bound（计算受限 / 算力瓶颈）
+
+*   **定义：** 数据搬运得很快，内存带宽根本没跑满，但你的 **浮点运算单元（FLOPs）已经 100% 满载**，代码必须排队等待 GPU 把复杂的矩阵乘法（MatMul）算完。
+*   **典型 AI 场景：大模型的 Training（训练）阶段，或推理的 Prefill（预填充）阶段。**
+    *   当你输入一个极长的 Prompt（Batch Size 很大），系统把所有数据一次性塞进显存。此时内存搬运只需一次，但底层产生了极其庞大且密集的矩阵-矩阵乘法（GEMM）。此时就是纯粹拼 NVDA H100 的峰值算力测试。
+
+2. Compute Wall（计算墙 / 摩尔定律终结）
+
+*   **定义：** 晶体管尺寸逼近原子的物理极限（量子隧穿效应），光刻机的掩膜版极限（Reticle Limit）使得单块芯片的面积无法再做大。靠缩小晶体管来提升算力的红利已经终结。
+*   **硬件解法：** 走向多芯粒封装（Chiplet）、拼装架构（如 M1 Ultra 的 UltraFusion 拼接）。
+
+💡 你必须在白板上写下这个终极指标：**算术强度 (Arithmetic Intensity, 简称 AI)**
+$$\text{算术强度} = \frac{\text{总浮点运算量 (FLOPs)}}{\text{总内存读写量 (Bytes)}}$$
+
+*   **物理推演：**
+    *   每个 GPU 都有一个硬件固定的**“拐点 (Ridge Point)”**（等于它的 `峰值算力 / 峰值内存带宽`）。
+    *   如果你的算法算术强度 **<** 硬件拐点 $\to$ **Memory Bound（内存受限）**。
+    *   如果你的算法算术强度 **>** 硬件拐点 $\to$ **Compute Bound（计算受限）**。
+
+*   做量化（AWQ）、做 PagedAttention，本质上是为了对抗 **Memory Bound**。
+*   用 C++ 手写高性能算子、做 Kernel 融合（Kernel Fusion），本质上是为了拉高算术强度，对抗 **Compute Bound**。
+
+
 
 ---
 
@@ -333,6 +405,10 @@ Point3：
 Apple Silicon（M2/M3 Ultra）采用的是**统一内存架构（UMA, Unified Memory Architecture）**，一台 Mac Studio 的内存可以高达 **192GB 甚至 256GB**！这意味着，传统的单张 Nvidia 显卡跑不起来的 7B 全量微调，**在 Apple 的 M 系列芯片上是可以单机单卡直接跑通的！** 
 
 ---
+
+
+
+
 
 
 
