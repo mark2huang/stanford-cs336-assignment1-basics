@@ -1480,7 +1480,27 @@ def data_generator(file_path, num_samples, image_shape, batch_size=32):
 #     train_step(batch)
 ```
 
+
+
+### 30.你知道Apple 大模型和腾讯混元大模型吗？介绍下
+
 ---
+
+💡 **回答**：
+
+#### 1. Apple 大模型：AFM 3 (Apple Foundation Models, Gen 3)
+
+- **部署战略：** **端侧优先（On-Device First）+ 极致隐私 [1.1.2, 1.3.1]。**
+- **架构规格：** 包括可在 iPhone/Mac 上运行的 **AFM 3 Core (3B 参数密实模型)** 和 **AFM 3 Core Advanced (20B 参数、激活 1-4B 的稀疏 MoE 模型)** [1.3.5]。
+- **技术特色：** 深度耦合 Apple Silicon 的统一内存架构（UMA）与 Core AI 框架 [1.3.3]。苹果不追求它去解答高难度微积分或撰写商业宏观报告，而是让它成为你设备上的**“超级系统调度器（Siri AI）”** [1.1.2, 1.2.2]，专门用来理解屏幕内容（Ferret-UI 架构）、进行跨 App 操作 [1.2.2]，并依靠 **私密云计算（PCC）** 解决超大上下文的安全推理。
+
+#### 2. 腾讯混元大模型（Tencent Hunyuan）
+
+- **部署战略：** **云端万亿级（Trillion-scale）大参数集群 + B端产业应用。**
+- **架构规格：** 采用混合 MoE（混合专家）架构，其旗舰版（Hunyuan-Pro/Turbo）在云端部署，参数量高达数千亿甚至万亿级别。
+- **技术特色：**
+  - **中文与多模态霸权：** 混元在中文语境、古诗词理解、复杂长文逻辑以及产业 B 端应用上，其“智商（IQ）”明显高于 Apple 的端侧小模型。
+  - **多模态视频生成（Hunyuan-Video）：** 在 2026 年，腾讯的混元视频生成模型是业界的顶级杀器，其生成视频的物理规律拟合和画面质感正与 Sora 贴身肉搏。它被广泛应用于微信视频号、腾讯广告和游戏资产生成的流水线中。
 
 
 
@@ -1494,4 +1514,205 @@ Mark，你这步棋走得**太绝了！这是教科书级别的面试素材积�
 - **你的收获：** 你今天不仅是在学用手机，你是在**摸底未来雇主的价值观**。
 
 
+
+### 算法题积累
+
+53. 最大子数组和
+
+> 状态转移的绝对数学逻辑：
+>
+> 当我计算 dp[i] 时，我只看我前一步积累的资产 dp[i-1]：
+>
+> 如果 dp[i-1] > 0： 说明历史资产是正向能量。我直接吸收它：dp[i] = dp[i-1] + nums[i]。
+>
+> 如果 dp[i-1] <= 0： 说明加上它只会拖累我。我直接斩断过去，重置状态：dp[i] = nums[i]
+
+```python
+        for i in range(1,len(nums)):
+            if current_sum>0:
+                current_sum+=nums[i]
+            else:
+                current_sum=nums[i]
+            max_sum=max(max_sum,current_sum)
+```
+
+
+
+206.反转链表
+
+```python
+        def reverse_linked_list(head:ListNode):
+            pre=None
+            cur=head
+            while cur:
+                #先让 pre 踩在当前节点上，然后再让 cur 走到下一个节点去
+                #“凡是带有 .（点号）的赋值（如 node.next = xxx），你是在物理修改堆内存（Heap）中数据结构的拓扑连接。”
+                #“凡是没有 .（点号）的赋值（如 pre = xxx），你只是在栈内存（Stack）中移动一个毫无影响的临时探针（Pointer/Label）。”
+                next_node=cur.next
+                cur.next=pre
+                pre=cur
+                cur=next_node
+```
+
+92. 反转链表 II
+
+```python
+        # 因为头节点有可能发生变化，使用虚拟头节点可以避免复杂的分类讨论
+        dummy_node=ListNode(-1)
+        dummy_node.next=head
+        pre_node=dummy_node
+        # 第 1 步：从虚拟头节点走 left - 1 步，来到 left 节点的前一个节点
+        # 建议写在 for 循环里，语义清晰   
+        for i in range(left-1):
+            pre_node=pre_node.next
+        # 第 2 步：从 dumm 再走 right - left + 1 步，来到 right 节点
+        right_node=pre_node
+        for i in range(right-left+1):
+            right_node=right_node.next
+        #第3步：取出这个子链表
+        left_node=pre_node.next
+        succ_node=right_node.next
+        pre_node.next=None
+        right_node.next=None
+```
+
+
+
+146. LRU 缓存
+
+```python
+class Node():
+    def __init__(self,key=0,val=0):
+        self.key=key
+        self.val=val
+        self.prev=None
+        self.next=None
+
+class LRUCache():
+
+    def __init__(self, capacity: int):
+        self.capacity=capacity
+        self.cache={}
+        self.head=Node()
+        self.tail=Node()
+        self.head.next=self.tail
+        self.tail.prev=self.head
+
+    #将节点插入到大门后面
+    def _add_node_to_head(self,node):
+        node.prev=self.head
+        node.next=self.head.next
+        self.head.next.prev=node
+        self.head.next=node
+
+    #将节点从当前物理链路中去掉,提取目标点的左右邻居，相互连接
+    def _remove_node(self,node):
+        prev_node=node.prev
+        next_node=node.next
+        prev_node.next=next_node
+        next_node.prev=prev_node
+
+    #刷新活跃度：先剥离再插回head
+    def _move_to_head(self,node):
+        self._remove_node(node)
+        self._add_node_to_head(node)
+
+    def _pop_tail(self):
+        res=self.tail.prev
+        self._remove_node(res)
+        return res
+
+    def get(self, key: int) -> int:
+        if key not in self.cache:
+            return -1
+        node=self.cache[key]
+        self._move_to_head(node)
+        return node.val
+
+
+    def put(self, key: int, value: int) -> None:
+        if key in self.cache:
+            node=self.cache[key]
+            node.val=value
+            self._move_to_head(node)
+        else:
+            new_node=Node(key,value)
+            self.cache[key]=new_node
+            self._add_node_to_head(new_node)
+            if len(self.cache)>self.capacity:
+                tail_node=self._pop_tail()
+                del self.cache[tail_node.key]
+
+
+
+# Your LRUCache object will be instantiated and called as such:
+# obj = LRUCache(capacity)
+# param_1 = obj.get(key)
+# obj.put(key,value)
+```
+
+
+
+3. 无重复字符的最长子串
+
+```python
+#本题采用双向链表+hash
+class Solution:
+    def lengthOfLongestSubstring(self, s: str) -> int:
+        #char_map是字典，记录每个字符出现的位置
+        char_map={}
+        max_len=0
+        left=0
+        for right in range(len(s)):
+            char=s[right]
+            if char in char_map and char_map[char]>=left:
+                left=char_map[char]+1
+            char_map[char]=right
+            max_len=max(max_len,right-left+1)
+        return max_len
+```
+
+
+
+215. 数组中的第K个最大元素
+
+```python
+#本题采用最小堆数据结构，
+import heapq
+class Solution:
+    def findKthLargest(self, nums: List[int], k: int) -> int:
+        min_heap=[]
+        for num in nums:
+            heapq.heappush(min_heap,num)
+            if len(min_heap)>k:
+                heappop(min_heap)
+        return min_heap[0]
+```
+
+
+
+322. 零钱兑换
+
+```python
+        for i in range(1,amount+1):
+            for coin in coins:
+                # 状态转移关口：只有当当前金额 i 能容下这枚硬币时，才发生状态转移
+                if i-coin>=0:
+                    # 历史包袱比较：
+                    # 是保留目前的最好方案 dp[i]？
+                    # 还是拿走当前硬币(+1)，并继承剩下金额的最优解 dp[i-coin]？
+                    dp[i]=min(dp[i-coin]+1,dp[i])
+```
+
+518. 零钱兑换 II
+
+```python
+        # 核心坑点：必须把硬币的循环放在外层！
+        # 为什么？如果在内层，你会算出 (1+2) 和 (2+1) 两种组合（排列数）。
+        # 硬币在外层，意味着我们先把所有的 1 分硬币物理拼满，再拿 2 分硬币去拼，杜绝了重复路线！
+        for coin in coins:
+            for i in range(coin, amount + 1):
+                # 继承历史：当前的方案数 = 原有的方案数 + 拿掉这枚硬币后的方案数
+                dp[i] += dp[i - coin]
+```
 
